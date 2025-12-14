@@ -1,0 +1,106 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+
+# Virtualenv
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+wheels/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.nox/
+.tox/
+
+# Type checkers
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# =========================
+# PyCharm / IntelliJ
+# =========================
+.idea/
+*.iml
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Logs / runtime
+# =========================
+*.log
+logs/
+*.pid
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Google service account credentials (NEVER COMMIT)
+service_account.json
+**/service_account.json
+google-service-account*.json
+*service-account*.json
+
+# Twilio / local config
+config.local.py
+local_settings.py
+
+# =========================
+# Demo / fixtures (optionnel)
+# =========================
+demo/fixtures/*.json
+demo/fixtures/*.csv
+
+# If you DO want to version demo fixtures, comment the lines above.
+
+# =========================
+# Local dev tools
+# =========================
+.envrc
+.vscode/
+*.code-workspace
+
+# =========================
+# FastAPI / Uvicorn
+# =========================
+*.sqlite3
+*.db
+
+# =========================
+# Misc
+# =========================
+cache/
+tmp/

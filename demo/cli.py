@@ -1,0 +1,559 @@
+# demo/cli.py
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import datetime as dt
+import hashlib
+import json
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+# --- Optional deps (LIVE + TwiML) ---
+try:
+    from twilio.rest import Client as TwilioRestClient
+    from twilio.base.exceptions import TwilioRestException
+    from twilio.twiml.voice_response import VoiceResponse, Dial
+except Exception:  # pragma: no cover
+    TwilioRestClient = None  # type: ignore
+    TwilioRestException = Exception  # type: ignore
+    VoiceResponse = None  # type: ignore
+    Dial = None  # type: ignore
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:  # pragma: no cover
+    gspread = None  # type: ignore
+    Credentials = None  # type: ignore
+
+
+# =========================
+# Errors (fine-grained)
+# =========================
+class CLIError(Exception):
+    exit_code = 4
+
+    def __init__(self, message: str, *, exit_code: Optional[int] = None, details: Optional[dict] = None):
+        super().__init__(message)
+        if exit_code is not None:
+            self.exit_code = exit_code
+        self.details = details or {}
+
+
+class ValidationError(CLIError):
+    exit_code = 2
+
+
+class NotFoundError(CLIError):
+    exit_code = 2
+
+
+class ExternalServiceError(CLIError):
+    exit_code = 3
+
+
+class ConfigError(CLIError):
+    exit_code = 2
+
+
+# =========================
+# Logging (square logs)
+# =========================
+class _ContextFilter(logging.Filter):
+    def __init__(self, ctx: dict[str, Any]):
+        super().__init__()
+        self.ctx = ctx
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Provide a stable field for formatting.
+        record.ctx = " ".join([f"{k}={v}" for k, v in self.ctx.items() if v is not None])
+        return True
+
+
+def setup_logging(level: str, *, json_logs: bool, ctx: dict[str, Any]) -> logging.Logger:
+    logger = logging.getLogger("proxycall.demo")
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    logger.handlers.clear()
+    logger.propagate = False
+
+    h = logging.StreamHandler(sys.stdout)
+    h.setLevel(logger.level)
+
+    if json_logs:
+        # Minimal JSON logs without external deps
+        class JsonFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                payload = {
+                    "ts": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "msg": record.getMessage(),
+                    "ctx": getattr(record, "ctx", ""),
+                }
+                if record.exc_info:
+                    payload["exc"] = self.formatException(record.exc_info)
+                return json.dumps(payload, ensure_ascii=False)
+
+        h.setFormatter(JsonFormatter())
+    else:
+        # "Square" logs: [ts] [LEVEL] [logger] message | ctx=...
+        h.setFormatter(
+            logging.Formatter(
+                fmt="[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s | %(ctx)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+
+    logger.addHandler(h)
+    logger.addFilter(_ContextFilter(ctx))
+    return logger
+
+
+# =========================
+# Domain model
+# =========================
+E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")  # pragmatic E.164 check
+
+
+@dataclasses.dataclass
+class DemoClient:
+    client_id: str
+    client_name: str
+    phone_real: str
+    phone_proxy: str
+    country_code: str
+
+
+def normalize_e164_like(phone: str) -> str:
+    p = str(phone or "").strip().replace(" ", "")
+    if not p:
+        raise ValidationError("Numéro vide.")
+    if not p.startswith("+"):
+        p = "+" + p
+    return p
+
+
+def validate_e164(phone: str, label: str) -> str:
+    p = normalize_e164_like(phone)
+    if not E164_RE.match(p):
+        raise ValidationError(f"{label} invalide (attendu format E.164, ex: +33601020304).", details={"value": p})
+    return p
+
+
+def extract_country_code_simple(phone_e164: str) -> str:
+    # Simple (comme ton service actuel): +33, +49, +1 ...
+    p = normalize_e164_like(phone_e164)
+    return p[:3]
+
+
+# =========================
+# TwiML helpers
+# =========================
+def twiml_dial(*, proxy_number: str, real_number: str) -> str:
+    if VoiceResponse is None or Dial is None:
+        raise ExternalServiceError("Dépendance Twilio TwiML manquante. Installe 'twilio'.")
+    resp = VoiceResponse()
+    dial = Dial(callerId=proxy_number)
+    dial.number(real_number)
+    resp.append(dial)
+    return str(resp)
+
+
+def twiml_block(message: str) -> str:
+    if VoiceResponse is None:
+        raise ExternalServiceError("Dépendance Twilio TwiML manquante. Installe 'twilio'.")
+    resp = VoiceResponse()
+    resp.say(message)
+    return str(resp)
+
+
+# =========================
+# Storage interfaces
+# =========================
+class ClientStore:
+    def get_by_id(self, client_id: str) -> Optional[DemoClient]:
+        raise NotImplementedError
+
+    def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
+        raise NotImplementedError
+
+    def save(self, client: DemoClient) -> None:
+        raise NotImplementedError
+
+
+class MockJsonStore(ClientStore):
+    def __init__(self, path: Path, logger: logging.Logger):
+        self.path = path
+        self.logger = logger
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.exists():
+            self.path.write_text("[]", encoding="utf-8")
+
+    def _load(self) -> list[dict[str, Any]]:
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise ExternalServiceError("Fixtures JSON corrompues.", details={"path": str(self.path)}) from e
+
+    def _dump(self, rows: list[dict[str, Any]]) -> None:
+        self.path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def get_by_id(self, client_id: str) -> Optional[DemoClient]:
+        for r in self._load():
+            if r.get("client_id") == client_id:
+                return DemoClient(**r)
+        return None
+
+    def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
+        p = normalize_e164_like(proxy_number)
+        for r in self._load():
+            if normalize_e164_like(r.get("phone_proxy", "")) == p:
+                return DemoClient(**r)
+        return None
+
+    def save(self, client: DemoClient) -> None:
+        rows = self._load()
+        rows = [r for r in rows if r.get("client_id") != client.client_id]
+        rows.append(dataclasses.asdict(client))
+        self._dump(rows)
+
+
+class SheetsStore(ClientStore):
+    SCOPES = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    HEADERS = ["client_id", "client_name", "phone_real", "phone_proxy", "country_code"]
+
+    def __init__(self, *, sheet_name: str, service_account_file: str, worksheet: str, logger: logging.Logger):
+        if gspread is None or Credentials is None:
+            raise ExternalServiceError("Dépendance Google Sheets manquante. Installe 'gspread' et 'google-auth'.")
+        self.logger = logger
+        try:
+            creds = Credentials.from_service_account_file(service_account_file, scopes=self.SCOPES)
+            gc = gspread.authorize(creds)
+            sh = gc.open(sheet_name)
+            self.ws = sh.worksheet(worksheet)
+        except FileNotFoundError as e:
+            raise ConfigError("Fichier service account introuvable.", details={"path": service_account_file}) from e
+        except Exception as e:
+            raise ExternalServiceError("Impossible d’ouvrir Google Sheet / worksheet.", details={"sheet": sheet_name, "worksheet": worksheet}) from e
+
+        self._ensure_headers()
+
+    def _ensure_headers(self) -> None:
+        try:
+            first = self.ws.row_values(1)
+            if [h.strip() for h in first] != self.HEADERS:
+                # If empty sheet, write headers. If not empty but different, don't overwrite.
+                if len(first) == 0:
+                    self.ws.insert_row(self.HEADERS, 1)
+                else:
+                    self.logger.warning("Headers Sheets inattendus (on n’écrase pas).")
+        except Exception as e:
+            raise ExternalServiceError("Erreur lecture/initialisation headers Sheets.") from e
+
+    def _all_records(self) -> list[dict[str, Any]]:
+        try:
+            # gspread returns list of dicts with headers
+            return self.ws.get_all_records()
+        except Exception as e:
+            raise ExternalServiceError("Erreur lecture Sheets (get_all_records).") from e
+
+    def get_by_id(self, client_id: str) -> Optional[DemoClient]:
+        for r in self._all_records():
+            if str(r.get("client_id", "")).strip() == client_id:
+                return DemoClient(
+                    client_id=str(r.get("client_id", "")),
+                    client_name=str(r.get("client_name", "")),
+                    phone_real=str(r.get("phone_real", "")),
+                    phone_proxy=str(r.get("phone_proxy", "")),
+                    country_code=str(r.get("country_code", "")),
+                )
+        return None
+
+    def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
+        p = normalize_e164_like(proxy_number)
+        for r in self._all_records():
+            if normalize_e164_like(str(r.get("phone_proxy", ""))) == p:
+                return DemoClient(
+                    client_id=str(r.get("client_id", "")),
+                    client_name=str(r.get("client_name", "")),
+                    phone_real=str(r.get("phone_real", "")),
+                    phone_proxy=str(r.get("phone_proxy", "")),
+                    country_code=str(r.get("country_code", "")),
+                )
+        return None
+
+    def save(self, client: DemoClient) -> None:
+        # Upsert naïf : si trouvé -> update la ligne; sinon -> append.
+        try:
+            records = self._all_records()
+            # Need the row index: get_all_records excludes header; row index starts at 2
+            for i, r in enumerate(records, start=2):
+                if str(r.get("client_id", "")).strip() == client.client_id:
+                    self.ws.update(
+                        f"A{i}:E{i}",
+                        [[client.client_id, client.client_name, client.phone_real, client.phone_proxy, client.country_code]],
+                    )
+                    return
+
+            self.ws.append_row([client.client_id, client.client_name, client.phone_real, client.phone_proxy, client.country_code])
+        except Exception as e:
+            raise ExternalServiceError("Erreur écriture Sheets (save).") from e
+
+
+# =========================
+# Twilio (LIVE)
+# =========================
+def twilio_buy_number(*, account_sid: str, auth_token: str, country: str, voice_url: str, friendly_name: str) -> str:
+    if TwilioRestClient is None:
+        raise ExternalServiceError("Dépendance Twilio manquante. Installe 'twilio'.")
+    try:
+        cli = TwilioRestClient(account_sid, auth_token)
+        avail = cli.available_phone_numbers(country).local.list(limit=1)
+        if not avail:
+            raise ExternalServiceError(f"Aucun numéro local disponible pour le pays {country}.")
+        phone_number = avail[0].phone_number
+        incoming = cli.incoming_phone_numbers.create(
+            phone_number=phone_number,
+            voice_url=voice_url,
+            friendly_name=friendly_name,
+        )
+        return incoming.phone_number
+    except TwilioRestException as e:
+        raise ExternalServiceError("Erreur Twilio (achat/config numéro).", details={"status": getattr(e, "status", None), "msg": str(e)}) from e
+
+
+# =========================
+# CLI actions
+# =========================
+def ensure_env(var: str) -> str:
+    v = os.getenv(var)
+    if not v:
+        raise ConfigError(f"Variable d’environnement manquante: {var}")
+    return v
+
+
+def make_proxy_mock(client_id: str, country_code: str) -> str:
+    # proxy stable et "réaliste" (mais fake) basé sur hash(client_id)
+    h = hashlib.sha256(client_id.encode("utf-8")).hexdigest()
+    digits = "".join([c for c in h if c.isdigit()])[:9].ljust(9, "0")
+    # country_code is like "+33" => keep it and pad digits
+    return f"{country_code}{digits}"
+
+
+def do_create_client(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
+    client_id = (args.client_id or "").strip()
+    if not client_id:
+        raise ValidationError("--client-id requis.")
+    client_name = (args.name or "").strip()
+    if not client_name:
+        raise ValidationError("--name requis.")
+    phone_real = validate_e164(args.phone_real, "phone_real")
+
+    existing = store.get_by_id(client_id)
+    if existing:
+        logger.info("Client déjà existant (pas de création).")
+        print(json.dumps(dataclasses.asdict(existing), indent=2, ensure_ascii=False))
+        return 0
+
+    cc = extract_country_code_simple(phone_real)
+
+    if args.mode == "mock":
+        proxy = make_proxy_mock(client_id, cc)
+    else:
+        account_sid = ensure_env("TWILIO_ACCOUNT_SID")
+        auth_token = ensure_env("TWILIO_AUTH_TOKEN")
+        country = os.getenv("TWILIO_PHONE_COUNTRY", "US")
+        public_base_url = ensure_env("PUBLIC_BASE_URL")
+        voice_url = public_base_url.rstrip("/") + "/twilio/voice"
+        proxy = twilio_buy_number(
+            account_sid=account_sid,
+            auth_token=auth_token,
+            country=country,
+            voice_url=voice_url,
+            friendly_name=f"Client-{client_id}",
+        )
+
+    client = DemoClient(
+        client_id=client_id,
+        client_name=client_name,
+        phone_real=phone_real,
+        phone_proxy=normalize_e164_like(proxy),
+        country_code=cc,
+    )
+    store.save(client)
+
+    logger.info("Client créé.")
+    print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
+    return 0
+
+
+def do_lookup(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
+    proxy = validate_e164(args.proxy, "proxy")
+    client = store.get_by_proxy(proxy)
+    if not client:
+        raise NotFoundError("Aucun client trouvé pour ce proxy.", details={"proxy": proxy})
+    logger.info("Client trouvé.")
+    print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
+    return 0
+
+
+def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
+    caller = validate_e164(args.from_number, "from")
+    proxy = validate_e164(args.to_number, "to (proxy)")
+
+    client = store.get_by_proxy(proxy)
+    if not client:
+        raise NotFoundError("Proxy inconnu (aucun client associé).", details={"proxy": proxy})
+
+    caller_cc = extract_country_code_simple(caller)
+    if client.country_code and caller_cc != client.country_code:
+        logger.warning("Routage refusé (country mismatch).")
+        print(twiml_block("Sorry, calls are only allowed from the same country."))
+        return 0
+
+    logger.info("Routage autorisé (Dial vers phone_real).")
+    print(twiml_dial(proxy_number=normalize_e164_like(client.phone_proxy), real_number=normalize_e164_like(client.phone_real)))
+    return 0
+
+
+def do_create_order(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
+    # Démo simple: "order" => garantit client + affiche proxy à communiquer
+    order_id = (args.order_id or "").strip()
+    if not order_id:
+        raise ValidationError("--order-id requis.")
+
+    # On réutilise la création client (idempotente côté store).
+    # Si le client n'existe pas, on le crée.
+    args2 = argparse.Namespace(
+        client_id=args.client_id,
+        name=args.name,
+        phone_real=args.phone_real,
+        mode=args.mode,
+    )
+    do_create_client(args2, store, logger)
+
+    client = store.get_by_id(args.client_id)
+    if not client:
+        raise ExternalServiceError("Création client échouée (client introuvable après save).")
+
+    logger.info("Commande créée (démo).")
+    out = {
+        "order_id": order_id,
+        "client_id": client.client_id,
+        "proxy_number_to_share": client.phone_proxy,
+    }
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
+# =========================
+# CLI wiring
+# =========================
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="proxycall-demo", description="ProxyCall DEMO CLI (mock/live)")
+    p.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="DEBUG, INFO, WARNING, ERROR")
+    p.add_argument("--json-logs", action="store_true", help="Logs JSON (utile pour ingestion).")
+    p.add_argument("--verbose", action="store_true", help="Affiche les stack traces en cas d’erreur.")
+    p.add_argument(
+        "--fixtures",
+        default=str(Path("demo/fixtures/clients.json")),
+        help="Chemin fixtures JSON (mode mock).",
+    )
+
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
+    mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
+
+    sp = p.add_subparsers(dest="cmd", required=True)
+
+    c1 = sp.add_parser("create-client", help="Crée (ou affiche si existe) un client + proxy.")
+    c1.add_argument("--client-id", required=True)
+    c1.add_argument("--name", required=True)
+    c1.add_argument("--phone-real", required=True)
+
+    c2 = sp.add_parser("lookup", help="Retrouve un client à partir du proxy.")
+    c2.add_argument("--proxy", required=True)
+
+    c3 = sp.add_parser("simulate-call", help="Simule un appel entrant et imprime le TwiML.")
+    c3.add_argument("--from", dest="from_number", required=True)
+    c3.add_argument("--to", dest="to_number", required=True)
+
+    c4 = sp.add_parser("create-order", help="Démo: crée une 'commande' et affiche le proxy à communiquer.")
+    c4.add_argument("--order-id", required=True)
+    c4.add_argument("--client-id", required=True)
+    c4.add_argument("--name", required=True)
+    c4.add_argument("--phone-real", required=True)
+
+    return p
+
+
+def select_mode(args: argparse.Namespace) -> str:
+    if args.live:
+        return "live"
+    # default mock
+    return "mock"
+
+
+def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
+    if mode == "mock":
+        return MockJsonStore(Path(args.fixtures), logger=logger)
+
+    # LIVE: requires Sheets config
+    sheet_name = ensure_env("GOOGLE_SHEET_NAME")
+    sa_file = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
+    worksheet = os.getenv("GOOGLE_CLIENTS_WORKSHEET", "Clients")
+    return SheetsStore(
+        sheet_name=sheet_name,
+        service_account_file=sa_file,
+        worksheet=worksheet,
+        logger=logger,
+    )
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    mode = select_mode(args)
+    ctx = {"mode": mode, "cmd": args.cmd}
+
+    logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
+
+    try:
+        store = make_store(mode, args, logger)
+
+        if args.cmd == "create-client":
+            args.mode = mode
+            return do_create_client(args, store, logger)
+        if args.cmd == "lookup":
+            return do_lookup(args, store, logger)
+        if args.cmd == "simulate-call":
+            return do_simulate_call(args, store, logger)
+        if args.cmd == "create-order":
+            args.mode = mode
+            return do_create_order(args, store, logger)
+
+        raise ValidationError("Commande inconnue.")
+    except CLIError as e:
+        logger.error(str(e))
+        if args.verbose and e.__cause__ is not None:
+            logger.exception("Détails exception:", exc_info=e.__cause__)
+        if getattr(e, "details", None):
+            logger.error("Details=%s", json.dumps(e.details, ensure_ascii=False))
+        return e.exit_code
+    except Exception as e:
+        # Catch-all unexpected errors
+        logger.exception("Erreur inattendue: %s", str(e))
+        return 4
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

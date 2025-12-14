@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+twilio
+gspread
+google-auth
+python-dotenv
