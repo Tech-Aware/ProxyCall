@@ -189,6 +189,9 @@ class ClientStore:
     def save(self, client: DemoClient) -> None:
         raise NotImplementedError
 
+    def list_all(self) -> list[DemoClient]:
+        raise NotImplementedError
+
 
 class MockJsonStore(ClientStore):
     def __init__(self, path: Path, logger: logging.Logger):
@@ -225,6 +228,9 @@ class MockJsonStore(ClientStore):
         rows = [r for r in rows if r.get("client_id") != client.client_id]
         rows.append(dataclasses.asdict(client))
         self._dump(rows)
+
+    def list_all(self) -> list[DemoClient]:
+        return [DemoClient(**r) for r in self._load()]
 
 
 class SheetsStore(ClientStore):
@@ -356,6 +362,20 @@ class SheetsStore(ClientStore):
         except Exception as e:
             raise ExternalServiceError("Erreur écriture Sheets (save).") from e
 
+    def list_all(self) -> list[DemoClient]:
+        return [
+            DemoClient(
+                client_id=str(r.get("client_id", "")),
+                client_name=str(r.get("client_name", "")),
+                client_mail=str(r.get("client_mail", "")),
+                client_real_phone=str(r.get("client_real_phone", "")),
+                client_proxy_number=str(r.get("client_proxy_number", "")),
+                client_iso_residency=str(r.get("client_iso_residency", "")),
+                client_country_code=str(r.get("client_country_code", "")),
+            )
+            for r in self._all_records()
+        ]
+
 
 # =========================
 # Twilio (LIVE)
@@ -414,10 +434,34 @@ def make_proxy_mock(client_id: str, country_code: str) -> str:
     return f"{country_code}{digits}"
 
 
+def compute_next_client_id(store: ClientStore) -> str:
+    """Génère un nouvel ID client en incrémentant le dernier entier connu.
+
+    Si aucun ID numérique n'est trouvé, on commence à 1. Le préfixe éventuel
+    (ex: "#" ou "client-") du dernier ID trouvé est conservé.
+    """
+
+    max_num = 0
+    prefix_for_max = ""
+
+    for client in store.list_all():
+        cid = (client.client_id or "").strip()
+        m = re.search(r"^(.*?)(\d+)$", cid)
+        if not m:
+            continue
+        num = int(m.group(2))
+        if num > max_num:
+            max_num = num
+            prefix_for_max = m.group(1)
+
+    return f"{prefix_for_max}{max_num + 1}" if prefix_for_max else str(max_num + 1)
+
+
 def do_create_client(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
-    client_id = (args.client_id or "").strip()
+    client_id = (getattr(args, "client_id", "") or "").strip()
     if not client_id:
-        raise ValidationError("--client-id requis.")
+        client_id = compute_next_client_id(store)
+        logger.info("ID attribué automatiquement.", extra={"client_id": client_id})
 
     existing = store.get_by_id(client_id)
 
@@ -432,36 +476,43 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     client_real_phone = validate_e164(real_phone_input, "client_real_phone")
 
     cc = extract_country_code_simple(client_real_phone)
-    iso_residency = (args.client_iso_residency or (existing.client_iso_residency if existing else "")).strip() or cc.replace("+", "")
+    iso_residency = (args.client_iso_residency or (existing.client_iso_residency if existing else "")).strip() or cc.replace(
+        "+", ""
+    )
     iso_residency = iso_residency.upper()
     country_code = (args.client_country_code or (existing.client_country_code if existing else "")).strip() or cc
     if country_code and not country_code.startswith("+"):
         country_code = "+" + country_code
 
+    assign_proxy = getattr(args, "assign_proxy", True)
+
     if existing and existing.client_proxy_number:
         proxy = existing.client_proxy_number
-    elif args.mode == "mock":
-        proxy = make_proxy_mock(client_id, cc)
+    elif assign_proxy:
+        if args.mode == "mock":
+            proxy = make_proxy_mock(client_id, cc)
+        else:
+            account_sid = ensure_env("TWILIO_ACCOUNT_SID")
+            auth_token = ensure_env("TWILIO_AUTH_TOKEN")
+            country = os.getenv("TWILIO_PHONE_COUNTRY", "US")
+            public_base_url = ensure_env("PUBLIC_BASE_URL")
+            voice_url = public_base_url.rstrip("/") + "/twilio/voice"
+            proxy = twilio_buy_number(
+                account_sid=account_sid,
+                auth_token=auth_token,
+                country=country,
+                voice_url=voice_url,
+                friendly_name=f"Client-{client_id}",
+            )
     else:
-        account_sid = ensure_env("TWILIO_ACCOUNT_SID")
-        auth_token = ensure_env("TWILIO_AUTH_TOKEN")
-        country = os.getenv("TWILIO_PHONE_COUNTRY", "US")
-        public_base_url = ensure_env("PUBLIC_BASE_URL")
-        voice_url = public_base_url.rstrip("/") + "/twilio/voice"
-        proxy = twilio_buy_number(
-            account_sid=account_sid,
-            auth_token=auth_token,
-            country=country,
-            voice_url=voice_url,
-            friendly_name=f"Client-{client_id}",
-        )
+        proxy = ""
 
     client = DemoClient(
         client_id=client_id,
         client_name=client_name,
         client_mail=client_mail,
         client_real_phone=client_real_phone,
-        client_proxy_number=normalize_e164_like(proxy),
+        client_proxy_number=normalize_e164_like(proxy) if proxy else "",
         client_iso_residency=iso_residency,
         client_country_code=country_code,
     )
@@ -565,12 +616,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = p.add_subparsers(dest="cmd", required=False)
 
     c1 = sp.add_parser("create-client", help="Crée (ou affiche si existe) un client + proxy.")
-    c1.add_argument("--client-id", required=True)
+    c1.add_argument("--client-id", required=False, help="Laisser vide pour auto-incrémenter.")
     c1.add_argument("--name", required=True)
     c1.add_argument("--client-mail", required=True)
     c1.add_argument("--client-real-phone", required=True)
     c1.add_argument("--client-iso-residency", default="")
     c1.add_argument("--client-country-code", default="")
+    c1.add_argument("--no-proxy", action="store_true", help="Créer sans attribuer de proxy.")
 
     c2 = sp.add_parser("lookup", help="Retrouve un client à partir du proxy.")
     c2.add_argument("--proxy", required=True)
@@ -653,7 +705,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
 
         while True:
             print("Menu principal :")
-            print("  1) Gérer un client (créer ou rechercher)")
+            print("  1) Gérer un client (créer / rechercher / attribuer un proxy)")
             print("  2) Simuler un appel autorisé (même indicatif pays)")
             print("  3) Simuler un appel bloqué (indicatif différent)")
             print("  0) Quitter")
@@ -671,6 +723,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                     print("\nGestion client :")
                     print("  1) Créer un client (saisie guidée)")
                     print("  2) Rechercher/afficher un client existant")
+                    print("  3) Attribuer un proxy à un client existant")
                     print("  0) Retour au menu principal")
                     sub_choice = input("Votre sélection : ").strip() or "0"
 
@@ -678,19 +731,21 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                         break
 
                     if sub_choice == "1":
-                        client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
+                        client_id = compute_next_client_id(store)
+                        print(f"ID attribué automatiquement : {client_id}")
                         name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
                         client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"
                         client_real_phone = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
-                        iso_residency = input("ISO pays de résidence (ex: FR) : ").strip() or "FR"
-                        client_country_code = extract_country_code_simple(client_real_phone)
+                        assign_proxy_answer = (input("Attribuer un proxy maintenant ? [O/n] : ").strip().lower() or "o")
+                        assign_proxy = not assign_proxy_answer.startswith("n")
                         args_client = argparse.Namespace(
                             client_id=client_id,
                             name=name,
                             client_mail=client_mail,
                             client_real_phone=client_real_phone,
-                            client_iso_residency=iso_residency,
-                            client_country_code=client_country_code,
+                            client_iso_residency="",
+                            client_country_code="",
+                            assign_proxy=assign_proxy,
                             mode=args.mode,
                         )
                         try:
@@ -728,7 +783,38 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                         print(json.dumps(dataclasses.asdict(found), indent=2, ensure_ascii=False))
                         continue
 
-                    print("Merci de choisir 0, 1 ou 2.\n")
+                    if sub_choice == "3":
+                        client_id = input("ID du client à équiper d'un proxy : ").strip()
+                        if not client_id:
+                            print("Merci de saisir un ID valide.\n")
+                            continue
+                        existing = store.get_by_id(client_id)
+                        if not existing:
+                            logger.warning("Client introuvable pour attribution proxy.")
+                            print("Aucun client correspondant.\n")
+                            continue
+                        if existing.client_proxy_number:
+                            logger.info("Proxy déjà attribué, rien à faire.")
+                            print("Ce client possède déjà un proxy.\n")
+                            continue
+
+                        args_client = argparse.Namespace(
+                            client_id=existing.client_id,
+                            name=existing.client_name,
+                            client_mail=existing.client_mail,
+                            client_real_phone=existing.client_real_phone,
+                            client_iso_residency=existing.client_iso_residency,
+                            client_country_code=existing.client_country_code,
+                            assign_proxy=True,
+                            mode=args.mode,
+                        )
+                        try:
+                            do_create_client(args_client, store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur attribution proxy: %s", exc)
+                        continue
+
+                    print("Merci de choisir 0, 1, 2 ou 3.\n")
                 continue
 
             if choice == "2":
@@ -803,6 +889,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return interactive_menu(args, store, logger)
 
         if args.cmd == "create-client":
+            args.assign_proxy = not args.no_proxy
             args.mode = mode
             return do_create_client(args, store, logger)
         if args.cmd == "lookup":
