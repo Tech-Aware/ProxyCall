@@ -284,17 +284,37 @@ class MockJsonStore(ClientStore):
 
     def save(self, client: DemoClient) -> None:
         rows = self._load()
-        filtered = []
+        preserved_iso = None
+        preserved_cc = None
+
+        filtered: list[dict[str, Any]] = []
         for r in rows:
             try:
                 if parse_client_id(r.get("client_id", 0)) == client.client_id:
+                    preserved_iso = r.get("client_iso_residency")
+                    preserved_cc = r.get("client_country_code")
                     continue
             except ValidationError:
                 continue
             filtered.append(r)
-        rows = filtered
-        rows.append(dataclasses.asdict(client))
-        self._dump(rows)
+
+        new_row: dict[str, Any] = {
+            "client_id": client.client_id,
+            "client_name": client.client_name,
+            "client_mail": client.client_mail,
+            "client_real_phone": client.client_real_phone,
+            "client_proxy_number": client.client_proxy_number if client.client_proxy_number is not None else "",
+        }
+
+        # Ne jamais écrire/écraser les colonnes calculées ; on ne les copie que si
+        # elles existaient déjà dans le JSON pour préserver l'état antérieur.
+        if preserved_iso is not None:
+            new_row["client_iso_residency"] = preserved_iso
+        if preserved_cc is not None:
+            new_row["client_country_code"] = preserved_cc
+
+        filtered.append(new_row)
+        self._dump(filtered)
 
     def list_all(self) -> list[DemoClient]:
         clients: list[DemoClient] = []
@@ -448,7 +468,7 @@ class SheetsStore(ClientStore):
         return None
 
     def save(self, client: DemoClient) -> None:
-        # Upsert naïf : si trouvé -> update la ligne; sinon -> append.
+        # Upsert sans jamais toucher aux colonnes calculées (ISO / country code).
         try:
             records = self._all_records()
             # Need the row index: get_all_records excludes header; row index starts at 2
@@ -458,8 +478,9 @@ class SheetsStore(ClientStore):
                 except ValidationError:
                     continue
                 if cid == client.client_id:
+                    # Mise à jour uniquement des colonnes A à E.
                     self.ws.update(
-                        f"A{i}:G{i}",
+                        f"A{i}:E{i}",
                         [
                             [
                                 client.client_id,
@@ -467,13 +488,13 @@ class SheetsStore(ClientStore):
                                 client.client_mail,
                                 client.client_real_phone,
                                 client.client_proxy_number or "",
-                                client.client_iso_residency,
-                                client.client_country_code,
                             ]
                         ],
                     )
                     return
 
+            # Append uniquement sur les colonnes A à E ; les colonnes calculées sont
+            # laissées au Sheet (formules/auto-calculs).
             self.ws.append_row(
                 [
                     client.client_id,
@@ -481,8 +502,6 @@ class SheetsStore(ClientStore):
                     client.client_mail,
                     client.client_real_phone,
                     client.client_proxy_number or "",
-                    client.client_iso_residency,
-                    client.client_country_code,
                 ]
             )
         except Exception as e:
