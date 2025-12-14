@@ -557,13 +557,13 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     client_real_phone = validate_e164(real_phone_input, "client_real_phone")
 
     cc = extract_country_code_simple(client_real_phone)
-    iso_residency = (args.client_iso_residency or (existing.client_iso_residency if existing else "")).strip() or cc.replace(
-        "+", ""
-    )
-    iso_residency = iso_residency.upper()
-    country_code = (args.client_country_code or (existing.client_country_code if existing else "")).strip() or cc
-    if country_code and not country_code.startswith("+"):
-        country_code = "+" + country_code
+
+    # Les colonnes "client_iso_residency" et "client_country_code" sont désormais
+    # exclusivement calculées côté Google Sheets : on ne les renseigne jamais lors
+    # des créations/mises à jour, mais on préserve les valeurs déjà présentes si
+    # le store les expose (ex: champs calculés existants).
+    iso_residency = existing.client_iso_residency if existing else ""
+    country_code = existing.client_country_code if existing else ""
 
     assign_proxy = getattr(args, "assign_proxy", True)
     if getattr(args, "no_proxy", False):
@@ -628,7 +628,11 @@ def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: loggi
         raise NotFoundError("Proxy inconnu (aucun client associé).", details={"proxy": proxy})
 
     caller_cc = extract_country_code_simple(caller)
-    if client.client_country_code and caller_cc != client.client_country_code:
+    expected_cc = client.client_country_code or extract_country_code_simple(client.client_real_phone)
+    if expected_cc and not expected_cc.startswith("+"):
+        expected_cc = "+" + expected_cc
+
+    if expected_cc and caller_cc != expected_cc:
         logger.warning("Routage refusé (country mismatch).")
         print(twiml_block("Sorry, calls are only allowed from the same country."))
         return 0
@@ -657,8 +661,6 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
         name=args.name,
         client_mail=args.client_mail,
         client_real_phone=args.client_real_phone,
-        client_iso_residency=args.client_iso_residency,
-        client_country_code=args.client_country_code,
         mode=args.mode,
     )
     do_create_client(args2, store, logger)
@@ -704,8 +706,6 @@ def build_parser() -> argparse.ArgumentParser:
     c1.add_argument("--name", required=True)
     c1.add_argument("--client-mail", required=True)
     c1.add_argument("--client-real-phone", required=True)
-    c1.add_argument("--client-iso-residency", default="")
-    c1.add_argument("--client-country-code", default="")
     c1.add_argument("--no-proxy", action="store_true", help="Créer sans attribuer de proxy.")
 
     c2 = sp.add_parser("lookup", help="Retrouve un client à partir du proxy.")
@@ -721,8 +721,6 @@ def build_parser() -> argparse.ArgumentParser:
     c4.add_argument("--name", required=True)
     c4.add_argument("--client-mail", required=True)
     c4.add_argument("--client-real-phone", required=True)
-    c4.add_argument("--client-iso-residency", default="")
-    c4.add_argument("--client-country-code", default="")
 
     return p
 
@@ -827,8 +825,6 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                             name=name,
                             client_mail=client_mail,
                             client_real_phone=client_real_phone,
-                            client_iso_residency="",
-                            client_country_code="",
                             assign_proxy=assign_proxy,
                             mode=args.mode,
                         )
@@ -900,8 +896,6 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                             name=existing.client_name,
                             client_mail=existing.client_mail,
                             client_real_phone=existing.client_real_phone,
-                            client_iso_residency=existing.client_iso_residency,
-                            client_country_code=existing.client_country_code,
                             assign_proxy=True,
                             mode=args.mode,
                         )
