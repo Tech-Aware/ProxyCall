@@ -464,7 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verbose", action="store_true", help="Affiche les stack traces en cas d’erreur.")
     p.add_argument(
         "--fixtures",
-        default=str(Path("demo/fixtures/clients.json")),
+        default=str((Path(__file__).parent / "fixtures" / "clients.json").resolve()),
         help="Chemin fixtures JSON (mode mock).",
     )
 
@@ -472,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
     mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
 
-    p.epilog = "Astuce : lance simplement `python demo/cli.py` et laisse-toi guider, aucun argument n'est requis."
+    p.epilog = "Astuce : lance simplement `python cli.py` et laisse-toi guider, aucun argument n'est requis."
 
     sp = p.add_subparsers(dest="cmd", required=False)
 

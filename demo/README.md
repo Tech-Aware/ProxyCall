@@ -51,7 +51,7 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 Lancez simplement la commande ci-dessous **sans aucun argument** :
 
 ```bash
-python demo/cli.py
+python cli.py
 ```
 
 Le CLI va :
