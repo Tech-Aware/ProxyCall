@@ -117,6 +117,23 @@ def setup_logging(level: str, *, json_logs: bool, ctx: dict[str, Any]) -> loggin
 
 
 # =========================
+# Console helpers
+# =========================
+ANSI_COLORS = {
+    "red": "\033[91m",
+    "reset": "\033[0m",
+}
+
+
+def colorize(text: str, color: str) -> str:
+    if not sys.stdout.isatty():  # pas de couleur en sortie non interactive
+        return text
+    prefix = ANSI_COLORS.get(color, "")
+    suffix = ANSI_COLORS["reset"] if prefix else ""
+    return f"{prefix}{text}{suffix}"
+
+
+# =========================
 # Domain model
 # =========================
 PHONE_DIGITS_RE = re.compile(r"^[0-9]{8,15}$")  # 8 à 15 chiffres, sans signe +
@@ -976,7 +993,8 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                             do_create_client(args_client, store, logger)
                         except CLIError as exc:
                             logger.error("Erreur création client: %s", exc)
-                            print(f"\n❌ Impossible de créer le client : {exc}\n")
+                            msg = f"\n❌ Impossible de créer le client : {exc}\n"
+                            print(colorize(msg, "red"))
                         continue
 
                     if sub_choice == "2":
