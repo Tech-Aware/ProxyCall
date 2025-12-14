@@ -66,6 +66,8 @@ Le CLI va :
 
 Les entrées par défaut sont préremplies (ex : `demo-client`, `+33900000000`) afin de pouvoir enchaîner très vite lors d’une démo live ou simulée.
 
+ℹ️ Si vous choisissez le mode **LIVE** sans avoir renseigné les variables d’environnement requises, le CLI vous proposera automatiquement de basculer en mode **MOCK** afin de continuer la démonstration sans erreur.
+
 Si vous préférez déclencher ces étapes depuis Python (pour afficher le rendu dans un notebook ou un script interne), utilisez le helper `run_mock_client_journey` de `demo/scenarios.py` :
 
 ```python

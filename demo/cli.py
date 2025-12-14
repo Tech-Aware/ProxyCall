@@ -615,7 +615,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
 
     try:
-        store = make_store(mode, args, logger)
+        try:
+            store = make_store(mode, args, logger)
+        except ConfigError as exc:
+            logger.error(str(exc))
+            if args.cmd is None and mode == "live":
+                print(
+                    "\nLe mode LIVE n'est pas prêt (variables d'environnement manquantes)."
+                    "\nVoulez-vous basculer en mode simulé (MOCK) ? [O/n]",
+                    end=" ",
+                )
+                answer = (input().strip().lower() or "o") if sys.stdin.isatty() else "o"
+                if answer.startswith("o"):
+                    mode = "mock"
+                    args.mode = mode
+                    ctx = {"mode": mode, "cmd": args.cmd or "menu"}
+                    logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
+                    store = make_store(mode, args, logger)
+                else:
+                    return exc.exit_code
+            else:
+                return exc.exit_code
 
         args.mode = mode
 
