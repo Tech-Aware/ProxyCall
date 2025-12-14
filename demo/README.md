@@ -39,12 +39,13 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 - Mode LIVE uniquement :
   - Compte Twilio + crédits
   - Accès à un Google Sheet (avec l’onglet `Clients`)
-  - Une URL publique HTTPS pour recevoir les webhooks (ex : ngrok)
+- Une URL publique HTTPS pour recevoir les webhooks (ex : ngrok)
 
 ## Notes
 
 - Le contenu de ce dossier est orienté **présentation** : il vise à montrer le fonctionnement et la valeur, pas à détailler toute l’implémentation.
 - Les secrets (Twilio, Google) doivent rester hors du dépôt (fichier `.env`, clé de service account, etc.).
+- Le CLI charge automatiquement un fichier `.env` à la racine du repo (et tout `.env` détecté via `find_dotenv`), ce qui permet de tester le mode LIVE sans exporter manuellement les variables.
 
 ## Lancer la démo pour un utilisateur non averti
 

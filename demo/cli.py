@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import find_dotenv, load_dotenv
+
 # --- Optional deps (LIVE + TwiML) ---
 try:
     from twilio.rest import Client as TwilioRestClient
@@ -340,6 +342,23 @@ def ensure_env(var: str) -> str:
     return v
 
 
+def load_env_files() -> list[Path]:
+    """Charge les fichiers .env pour le mode LIVE (racine du repo + découverte)."""
+    loaded: list[Path] = []
+
+    repo_env = Path(__file__).resolve().parent.parent / ".env"
+    if repo_env.exists():
+        load_dotenv(repo_env)
+        loaded.append(repo_env)
+
+    discovered = Path(find_dotenv(usecwd=True))
+    if discovered and discovered.exists() and discovered not in loaded:
+        load_dotenv(discovered)
+        loaded.append(discovered)
+
+    return loaded
+
+
 def make_proxy_mock(client_id: str, country_code: str) -> str:
     # proxy stable et "réaliste" (mais fake) basé sur hash(client_id)
     h = hashlib.sha256(client_id.encode("utf-8")).hexdigest()
@@ -609,10 +628,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    loaded_env_files = load_env_files()
+
     mode = select_mode(args)
     ctx = {"mode": mode, "cmd": args.cmd or "menu"}
 
     logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
+
+    if loaded_env_files:
+        logger.debug("Fichiers .env chargés: %s", ", ".join(str(p) for p in loaded_env_files))
 
     try:
         try:
