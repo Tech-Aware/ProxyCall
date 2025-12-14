@@ -7,11 +7,25 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds = Credentials.from_service_account_file(
-    settings.GOOGLE_SERVICE_ACCOUNT_FILE,
-    scopes=SCOPES
-)
-gc = gspread.authorize(creds)
+gc = None
+
+
+def _get_gc():
+    """Initialise paresseusement le client gspread pour éviter les erreurs au chargement."""
+
+    global gc
+    if gc is not None:
+        return gc
+
+    if not settings.GOOGLE_SERVICE_ACCOUNT_FILE:
+        raise FileNotFoundError("Chemin du service account Google manquant.")
+
+    creds = Credentials.from_service_account_file(
+        settings.GOOGLE_SERVICE_ACCOUNT_FILE,
+        scopes=SCOPES
+    )
+    gc = gspread.authorize(creds)
+    return gc
 
 
 class SheetsClient:
@@ -21,11 +35,11 @@ class SheetsClient:
         Retourne la feuille 'Clients' du Google Sheet défini dans .env
         (GOOGLE_SHEET_NAME).
         """
-        sh = gc.open(settings.GOOGLE_SHEET_NAME)
+        sh = _get_gc().open(settings.GOOGLE_SHEET_NAME)
         return sh.worksheet("Clients")
 
     @staticmethod
     def get_pools_sheet():
         """Retourne la feuille 'TwilioPools' pour le pool de numéros."""
-        sh = gc.open(settings.GOOGLE_SHEET_NAME)
+        sh = _get_gc().open(settings.GOOGLE_SHEET_NAME)
         return sh.worksheet("TwilioPools")

@@ -1,7 +1,19 @@
 import logging
+import os
+
+import pytest
 
 from services.call_routing_service import CallRoutingService
 from services.clients_service import ClientsService
+
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("PROXYCALL_RUN_LIVE") != "1"
+    or not os.getenv("TWILIO_ACCOUNT_SID")
+    or not os.getenv("TWILIO_AUTH_TOKEN")
+    or not os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"),
+    reason="Tests live désactivés sans PROXYCALL_RUN_LIVE=1 et credentials complets.",
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

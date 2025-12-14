@@ -136,9 +136,8 @@ class ClientsService:
             cc = extract_country_code(client_real_phone)
             proxy = TwilioClient.buy_number_for_client(
                 friendly_name=f"Client-{client_id}",
-                country=proxy_country,
-                attribution_to_client_name=client_name,
                 country=twilio_country,
+                attribution_to_client_name=client_name,
             )
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception("Erreur lors de l'achat du numéro proxy", exc_info=exc)
