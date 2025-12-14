@@ -47,7 +47,7 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 - Les secrets (Twilio, Google) doivent rester hors du dépôt (fichier `.env`, clé de service account, etc.).
 - Le CLI charge automatiquement un fichier `.env` à la racine du repo (et tout `.env` détecté via `find_dotenv`), ce qui permet de tester le mode LIVE sans exporter manuellement les variables.
 - Le chemin vers le fichier **service account** peut être donné relativement à la racine du dépôt (pratique depuis PyCharm ou un autre répertoire).
-- L’onglet `Clients` du Google Sheet doit contenir au moins les colonnes suivantes (ordre attendu) : `client_id`, `client_name`, `client_mail`, `client_real_phone`, `client_proxy_number`, `client_iso_residency`, `client_country_code`. Des colonnes supplémentaires peuvent exister, le CLI ne réécrit pas les en-têtes. L’indicatif et l’ISO peuvent être dérivés automatiquement depuis `client_real_phone` côté sheet.
+- L’onglet `Clients` du Google Sheet doit contenir au moins les colonnes suivantes (ordre attendu) : `client_id`, `client_name`, `client_mail`, `client_real_phone`, `client_proxy_number`, `client_iso_residency`, `client_country_code`. Des colonnes supplémentaires peuvent exister, le CLI ne réécrit pas les en-têtes. L’indicatif et l’ISO peuvent être dérivés automatiquement depuis `client_real_phone` côté sheet. Les **nouveaux clients** sont toujours enregistrés avec un `client_id` **entier** auto-incrémenté (pas de string).
 
 ## Lancer la démo pour un utilisateur non averti
 
@@ -63,11 +63,11 @@ Le CLI va :
    - `1` pour la démo **simulée (mock)** — recommandé, aucun prérequis
    - `2` pour la démo **live** — nécessite Twilio + Google Sheets
 2. Afficher un menu simple `1, 2, 3` pour :
-   - `1` Gérer un client : choix entre **créer** (ID auto-incrémenté, proxy optionnel), **rechercher/afficher** un client existant ou **attribuer un proxy** ultérieurement à un client déjà créé
+   - `1` Gérer un client : choix entre **créer** (ID auto-incrémenté entier, proxy optionnel), **rechercher/afficher** un client existant (par ID entier ou proxy) ou **attribuer un proxy** ultérieurement à un client déjà créé
    - `2` Simuler un appel autorisé (même indicatif pays)
    - `3` Simuler un appel bloqué (indicatif différent)
 
-Les entrées par défaut sont préremplies (ex : `demo-client`, `+33900000000`) afin de pouvoir enchaîner très vite lors d’une démo live ou simulée.
+Les entrées par défaut sont préremplies (ex : `+33900000000` pour le proxy mock). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante) sans saisie obligatoire.
 
 ℹ️ Si vous choisissez le mode **LIVE** sans avoir renseigné les variables d’environnement requises, le CLI vous proposera automatiquement de basculer en mode **MOCK** afin de continuer la démonstration sans erreur.
 

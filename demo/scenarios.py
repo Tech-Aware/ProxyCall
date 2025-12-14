@@ -64,7 +64,7 @@ def run_mock_client_journey(fixtures_path: Path | str = Path("demo/fixtures/clie
         LOGGER.info("Démarrage du scénario mock (fixtures=%s).", fixtures_path)
 
         args_create = argparse.Namespace(
-            client_id="demo-client",
+            client_id=1,
             name="Client Démo",
             client_mail="demo@example.com",
             client_real_phone="+33123456789",

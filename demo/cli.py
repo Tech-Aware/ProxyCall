@@ -124,7 +124,7 @@ E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")  # pragmatic E.164 check
 
 @dataclasses.dataclass
 class DemoClient:
-    client_id: str
+    client_id: int
     client_name: str
     client_mail: str
     client_real_phone: str
@@ -180,7 +180,7 @@ def twiml_block(message: str) -> str:
 # Storage interfaces
 # =========================
 class ClientStore:
-    def get_by_id(self, client_id: str) -> Optional[DemoClient]:
+    def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
         raise NotImplementedError
 
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
@@ -210,27 +210,75 @@ class MockJsonStore(ClientStore):
     def _dump(self, rows: list[dict[str, Any]]) -> None:
         self.path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def get_by_id(self, client_id: str) -> Optional[DemoClient]:
+    def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
+        target = parse_client_id(client_id)
         for r in self._load():
-            if r.get("client_id") == client_id:
-                return DemoClient(**r)
+            try:
+                if parse_client_id(r.get("client_id")) == target:
+                    return DemoClient(
+                        client_id=target,
+                        client_name=str(r.get("client_name", "")),
+                        client_mail=str(r.get("client_mail", "")),
+                        client_real_phone=str(r.get("client_real_phone", "")),
+                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_iso_residency=str(r.get("client_iso_residency", "")),
+                        client_country_code=str(r.get("client_country_code", "")),
+                    )
+            except ValidationError:
+                continue
         return None
 
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
         p = normalize_e164_like(proxy_number)
         for r in self._load():
             if normalize_e164_like(r.get("client_proxy_number", "")) == p:
-                return DemoClient(**r)
+                try:
+                    cid = parse_client_id(r.get("client_id"))
+                except ValidationError:
+                    continue
+                return DemoClient(
+                    client_id=cid,
+                    client_name=str(r.get("client_name", "")),
+                    client_mail=str(r.get("client_mail", "")),
+                    client_real_phone=str(r.get("client_real_phone", "")),
+                    client_proxy_number=str(r.get("client_proxy_number", "")),
+                    client_iso_residency=str(r.get("client_iso_residency", "")),
+                    client_country_code=str(r.get("client_country_code", "")),
+                )
         return None
 
     def save(self, client: DemoClient) -> None:
         rows = self._load()
-        rows = [r for r in rows if r.get("client_id") != client.client_id]
+        filtered = []
+        for r in rows:
+            try:
+                if parse_client_id(r.get("client_id", 0)) == client.client_id:
+                    continue
+            except ValidationError:
+                continue
+            filtered.append(r)
+        rows = filtered
         rows.append(dataclasses.asdict(client))
         self._dump(rows)
 
     def list_all(self) -> list[DemoClient]:
-        return [DemoClient(**r) for r in self._load()]
+        clients: list[DemoClient] = []
+        for r in self._load():
+            try:
+                clients.append(
+                    DemoClient(
+                        client_id=parse_client_id(r.get("client_id")),
+                        client_name=str(r.get("client_name", "")),
+                        client_mail=str(r.get("client_mail", "")),
+                        client_real_phone=str(r.get("client_real_phone", "")),
+                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_iso_residency=str(r.get("client_iso_residency", "")),
+                        client_country_code=str(r.get("client_country_code", "")),
+                    )
+                )
+            except ValidationError:
+                continue
+        return clients
 
 
 class SheetsStore(ClientStore):
@@ -296,26 +344,34 @@ class SheetsStore(ClientStore):
         except Exception as e:
             raise ExternalServiceError("Erreur lecture Sheets (get_all_records).") from e
 
-    def get_by_id(self, client_id: str) -> Optional[DemoClient]:
+    def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
+        target = parse_client_id(client_id)
         for r in self._all_records():
-            if str(r.get("client_id", "")).strip() == client_id:
-                return DemoClient(
-                    client_id=str(r.get("client_id", "")),
-                    client_name=str(r.get("client_name", "")),
-                    client_mail=str(r.get("client_mail", "")),
-                    client_real_phone=str(r.get("client_real_phone", "")),
-                    client_proxy_number=str(r.get("client_proxy_number", "")),
-                    client_iso_residency=str(r.get("client_iso_residency", "")),
-                    client_country_code=str(r.get("client_country_code", "")),
-                )
+            try:
+                if parse_client_id(r.get("client_id", "")) == target:
+                    return DemoClient(
+                        client_id=target,
+                        client_name=str(r.get("client_name", "")),
+                        client_mail=str(r.get("client_mail", "")),
+                        client_real_phone=str(r.get("client_real_phone", "")),
+                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_iso_residency=str(r.get("client_iso_residency", "")),
+                        client_country_code=str(r.get("client_country_code", "")),
+                    )
+            except ValidationError:
+                continue
         return None
 
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
         p = normalize_e164_like(proxy_number)
         for r in self._all_records():
             if normalize_e164_like(str(r.get("client_proxy_number", ""))) == p:
+                try:
+                    cid = parse_client_id(r.get("client_id", ""))
+                except ValidationError:
+                    continue
                 return DemoClient(
-                    client_id=str(r.get("client_id", "")),
+                    client_id=cid,
                     client_name=str(r.get("client_name", "")),
                     client_mail=str(r.get("client_mail", "")),
                     client_real_phone=str(r.get("client_real_phone", "")),
@@ -331,7 +387,11 @@ class SheetsStore(ClientStore):
             records = self._all_records()
             # Need the row index: get_all_records excludes header; row index starts at 2
             for i, r in enumerate(records, start=2):
-                if str(r.get("client_id", "")).strip() == client.client_id:
+                try:
+                    cid = parse_client_id(r.get("client_id", ""))
+                except ValidationError:
+                    continue
+                if cid == client.client_id:
                     self.ws.update(
                         f"A{i}:G{i}",
                         [
@@ -363,18 +423,23 @@ class SheetsStore(ClientStore):
             raise ExternalServiceError("Erreur écriture Sheets (save).") from e
 
     def list_all(self) -> list[DemoClient]:
-        return [
-            DemoClient(
-                client_id=str(r.get("client_id", "")),
-                client_name=str(r.get("client_name", "")),
-                client_mail=str(r.get("client_mail", "")),
-                client_real_phone=str(r.get("client_real_phone", "")),
-                client_proxy_number=str(r.get("client_proxy_number", "")),
-                client_iso_residency=str(r.get("client_iso_residency", "")),
-                client_country_code=str(r.get("client_country_code", "")),
-            )
-            for r in self._all_records()
-        ]
+        clients: list[DemoClient] = []
+        for r in self._all_records():
+            try:
+                clients.append(
+                    DemoClient(
+                        client_id=parse_client_id(r.get("client_id", 0)),
+                        client_name=str(r.get("client_name", "")),
+                        client_mail=str(r.get("client_mail", "")),
+                        client_real_phone=str(r.get("client_real_phone", "")),
+                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_iso_residency=str(r.get("client_iso_residency", "")),
+                        client_country_code=str(r.get("client_country_code", "")),
+                    )
+                )
+            except ValidationError:
+                continue
+        return clients
 
 
 # =========================
@@ -426,42 +491,58 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
-def make_proxy_mock(client_id: str, country_code: str) -> str:
+def make_proxy_mock(client_id: int, country_code: str) -> str:
     # proxy stable et "réaliste" (mais fake) basé sur hash(client_id)
-    h = hashlib.sha256(client_id.encode("utf-8")).hexdigest()
+    h = hashlib.sha256(str(client_id).encode("utf-8")).hexdigest()
     digits = "".join([c for c in h if c.isdigit()])[:9].ljust(9, "0")
     # country_code is like "+33" => keep it and pad digits
     return f"{country_code}{digits}"
 
 
-def compute_next_client_id(store: ClientStore) -> str:
-    """Génère un nouvel ID client en incrémentant le dernier entier connu.
+def parse_client_id(value: str | int) -> int:
+    """Convertit un identifiant vers un entier.
 
-    Si aucun ID numérique n'est trouvé, on commence à 1. Le préfixe éventuel
-    (ex: "#" ou "client-") du dernier ID trouvé est conservé.
+    Accepte des valeurs comme "7", "#7" ou "client-7" pour conserver la
+    robustesse par rapport aux données existantes, mais force un retour int.
     """
 
+    if isinstance(value, int):
+        return value
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValidationError("ID client manquant.")
+
+    m = re.search(r"(\d+)$", raw)
+    if not m:
+        raise ValidationError("ID client invalide: un entier est requis en suffixe.")
+
+    return int(m.group(1))
+
+
+def compute_next_client_id(store: ClientStore) -> int:
+    """Génère un nouvel ID client en incrémentant le dernier entier connu."""
+
     max_num = 0
-    prefix_for_max = ""
 
     for client in store.list_all():
-        cid = (client.client_id or "").strip()
-        m = re.search(r"^(.*?)(\d+)$", cid)
-        if not m:
+        try:
+            num = parse_client_id(client.client_id)
+        except ValidationError:
             continue
-        num = int(m.group(2))
-        if num > max_num:
-            max_num = num
-            prefix_for_max = m.group(1)
+        max_num = max(max_num, num)
 
-    return f"{prefix_for_max}{max_num + 1}" if prefix_for_max else str(max_num + 1)
+    return max_num + 1
 
 
 def do_create_client(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
-    client_id = (getattr(args, "client_id", "") or "").strip()
-    if not client_id:
+    raw_id_val = getattr(args, "client_id", None)
+    raw_id = str(raw_id_val).strip() if raw_id_val is not None else ""
+    if not raw_id:
         client_id = compute_next_client_id(store)
         logger.info("ID attribué automatiquement.", extra={"client_id": client_id})
+    else:
+        client_id = parse_client_id(raw_id_val)
 
     existing = store.get_by_id(client_id)
 
@@ -485,6 +566,8 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
         country_code = "+" + country_code
 
     assign_proxy = getattr(args, "assign_proxy", True)
+    if getattr(args, "no_proxy", False):
+        assign_proxy = False
 
     if existing and existing.client_proxy_number:
         proxy = existing.client_proxy_number
@@ -568,8 +651,9 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
 
     # On réutilise la création client (idempotente côté store).
     # Si le client n'existe pas, on le crée.
+    client_id = parse_client_id(args.client_id)
     args2 = argparse.Namespace(
-        client_id=args.client_id,
+        client_id=client_id,
         name=args.name,
         client_mail=args.client_mail,
         client_real_phone=args.client_real_phone,
@@ -579,7 +663,7 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
     )
     do_create_client(args2, store, logger)
 
-    client = store.get_by_id(args.client_id)
+    client = store.get_by_id(client_id)
     if not client:
         raise ExternalServiceError("Création client échouée (client introuvable après save).")
 
@@ -760,8 +844,16 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                         print("  2) Numéro proxy")
                         lookup_choice = input("Votre sélection (1 par défaut) : ").strip() or "1"
                         if lookup_choice == "1":
-                            client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
-                            found = store.get_by_id(client_id)
+                            client_id_raw = input("ID client (ex: 1) : ").strip()
+                            if not client_id_raw:
+                                print("Merci de saisir un ID numérique.\n")
+                                continue
+                            try:
+                                client_id_val = parse_client_id(client_id_raw)
+                            except CLIError as exc:
+                                logger.error("ID invalide: %s", exc)
+                                continue
+                            found = store.get_by_id(client_id_val)
                         elif lookup_choice == "2":
                             proxy = input("Numéro proxy (ex: +33900000000) : ").strip()
                             try:
@@ -788,7 +880,12 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                         if not client_id:
                             print("Merci de saisir un ID valide.\n")
                             continue
-                        existing = store.get_by_id(client_id)
+                        try:
+                            client_id_val = parse_client_id(client_id)
+                        except CLIError as exc:
+                            logger.error("ID invalide: %s", exc)
+                            continue
+                        existing = store.get_by_id(client_id_val)
                         if not existing:
                             logger.warning("Client introuvable pour attribution proxy.")
                             print("Aucun client correspondant.\n")
