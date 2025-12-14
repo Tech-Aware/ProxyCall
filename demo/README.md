@@ -46,23 +46,25 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 - Le contenu de ce dossier est orienté **présentation** : il vise à montrer le fonctionnement et la valeur, pas à détailler toute l’implémentation.
 - Les secrets (Twilio, Google) doivent rester hors du dépôt (fichier `.env`, clé de service account, etc.).
 
-## Démarrer une démo mock rapidement
+## Lancer la démo pour un utilisateur non averti
 
-Lancez simplement le CLI puis répondez aux menus (1, 2, 3, 4…) pour être guidé :
+Lancez simplement la commande ci-dessous **sans aucun argument** :
 
 ```bash
-python -m demo.cli --mock --fixtures demo/fixtures/clients.json
+python demo/cli.py
 ```
 
-Déroulé proposé (tout est indiqué à l’écran) :
+Le CLI va :
 
-1. Choisir le **mode** (simulé/mock ou live)
-2. Menu `1` pour créer/afficher un client démo (idempotent)
-3. Menu `2` pour faire un lookup par numéro proxy
-4. Menu `3` pour simuler un appel autorisé (même indicatif pays)
-5. Menu `4` pour simuler un appel bloqué (indicatif différent)
+1. Vous demander le **mode** :
+   - `1` pour la démo **simulée (mock)** — recommandé, aucun prérequis
+   - `2` pour la démo **live** — nécessite Twilio + Google Sheets
+2. Afficher un menu simple `1, 2, 3` pour :
+   - `1` Créer/afficher le client démo et récupérer son numéro proxy
+   - `2` Simuler un appel autorisé (même indicatif pays)
+   - `3` Simuler un appel bloqué (indicatif différent)
 
-Les entrées par défaut sont préremplies (ex : `demo-client`, `+33900000000`) afin de pouvoir enchaîner très vite lors d’une démo live.
+Les entrées par défaut sont préremplies (ex : `demo-client`, `+33900000000`) afin de pouvoir enchaîner très vite lors d’une démo live ou simulée.
 
 Si vous préférez déclencher ces étapes depuis Python (pour afficher le rendu dans un notebook ou un script interne), utilisez le helper `run_mock_client_journey` de `demo/scenarios.py` :
 

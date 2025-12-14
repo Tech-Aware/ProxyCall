@@ -472,6 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
     mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
 
+    p.epilog = "Astuce : lance simplement `python demo/cli.py` et laisse-toi guider, aucun argument n'est requis."
+
     sp = p.add_subparsers(dest="cmd", required=False)
 
     c1 = sp.add_parser("create-client", help="Crée (ou affiche si existe) un client + proxy.")
@@ -502,9 +504,9 @@ def select_mode(args: argparse.Namespace) -> str:
         if args.mock:
             return "mock"
 
-        print("Choix du mode de démonstration :")
-        print("  1) Démo simulée (MOCK)")
-        print("  2) Démo live (LIVE)")
+        print("Bienvenue ! Choisis le mode de démonstration :")
+        print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
+        print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
 
         while True:
             user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
@@ -537,14 +539,17 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
 def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
     try:
         print("\n=== ProxyCall DEMO ===")
-        print("Répondez simplement par le numéro du menu. Tapez 0 pour quitter.\n")
+        print(
+            "Répondez simplement par le numéro du menu. Tapez 0 pour quitter."
+            "\nLes valeurs par défaut sont préremplies pour aller vite.\n"
+        )
+        print(f"Mode sélectionné : {args.mode.upper()}\n")
 
         while True:
             print("Menu principal :")
-            print("  1) Créer/afficher un client démo")
-            print("  2) Lookup via numéro proxy")
-            print("  3) Simuler un appel autorisé (même indicatif)")
-            print("  4) Simuler un appel bloqué (indicatif différent)")
+            print("  1) Créer/afficher le client démo et récupérer le proxy")
+            print("  2) Simuler un appel autorisé (même indicatif pays)")
+            print("  3) Simuler un appel bloqué (indicatif différent)")
             print("  0) Quitter")
 
             choice = input("Votre sélection : ").strip() or "0"
@@ -572,17 +577,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                 continue
 
             if choice == "2":
-                logger.info("Menu 2: lookup client demandé.")
-                proxy = input("Numéro proxy à rechercher (ex: +33900000000) : ").strip() or "+33900000000"
-                args_lookup = argparse.Namespace(proxy=proxy)
-                try:
-                    do_lookup(args_lookup, store, logger)
-                except CLIError as exc:
-                    logger.error("Erreur lookup: %s", exc)
-                continue
-
-            if choice == "3":
-                logger.info("Menu 3: simulation appel autorisé.")
+                logger.info("Menu 2: simulation appel autorisé.")
                 from_number = input("Numéro appelant (même pays, ex: +33111111111) : ").strip() or "+33111111111"
                 to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
                 args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
@@ -592,8 +587,8 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                     logger.error("Erreur simulation appel autorisé: %s", exc)
                 continue
 
-            if choice == "4":
-                logger.info("Menu 4: simulation appel bloqué.")
+            if choice == "3":
+                logger.info("Menu 3: simulation appel bloqué.")
                 from_number = input("Numéro appelant (autre pays, ex: +442222222222) : ").strip() or "+442222222222"
                 to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
                 args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
@@ -604,7 +599,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                 continue
 
             logger.warning("Choix inconnu: %s", choice)
-            print("Veuillez choisir 0, 1, 2, 3 ou 4.\n")
+            print("Veuillez choisir 0, 1, 2 ou 3.\n")
     except Exception as exc:  # pragma: no cover - boucle interactive
         logger.exception("Erreur inattendue dans le menu interactif: %s", exc)
         return 4
