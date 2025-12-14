@@ -418,28 +418,29 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     client_id = (args.client_id or "").strip()
     if not client_id:
         raise ValidationError("--client-id requis.")
-    client_name = (args.name or "").strip()
-    if not client_name:
-        raise ValidationError("--name requis.")
-    client_mail = (args.client_mail or "").strip()
-    if not client_mail:
-        raise ValidationError("--client-mail requis.")
-    client_real_phone = validate_e164(args.client_real_phone, "client_real_phone")
 
     existing = store.get_by_id(client_id)
-    if existing:
-        logger.info("Client déjà existant (pas de création).")
-        print(json.dumps(dataclasses.asdict(existing), indent=2, ensure_ascii=False))
-        return 0
+
+    client_name = (args.name or (existing.client_name if existing else "")).strip()
+    if not client_name:
+        raise ValidationError("--name requis.")
+    client_mail = (args.client_mail or (existing.client_mail if existing else "")).strip()
+    if not client_mail:
+        raise ValidationError("--client-mail requis.")
+
+    real_phone_input = args.client_real_phone or (existing.client_real_phone if existing else "")
+    client_real_phone = validate_e164(real_phone_input, "client_real_phone")
 
     cc = extract_country_code_simple(client_real_phone)
-    iso_residency = (args.client_iso_residency or "").strip() or cc.replace("+", "")
+    iso_residency = (args.client_iso_residency or (existing.client_iso_residency if existing else "")).strip() or cc.replace("+", "")
     iso_residency = iso_residency.upper()
-    country_code = (args.client_country_code or "").strip() or cc
+    country_code = (args.client_country_code or (existing.client_country_code if existing else "")).strip() or cc
     if country_code and not country_code.startswith("+"):
         country_code = "+" + country_code
 
-    if args.mode == "mock":
+    if existing and existing.client_proxy_number:
+        proxy = existing.client_proxy_number
+    elif args.mode == "mock":
         proxy = make_proxy_mock(client_id, cc)
     else:
         account_sid = ensure_env("TWILIO_ACCOUNT_SID")
@@ -466,7 +467,10 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     )
     store.save(client)
 
-    logger.info("Client créé.")
+    if existing:
+        logger.info("Client mis à jour (affiché ci-dessous).")
+    else:
+        logger.info("Client créé.")
     print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
     return 0
 
