@@ -128,6 +128,12 @@ COUNTRY_PHONE_RULES: dict[str, int] = {
     "351": 9,  # Portugal : 9 chiffres après l'indicatif (ex: 351 609875678)
 }
 
+# Exemples de formats attendus par indicatif pour des messages d'erreur plus clairs
+COUNTRY_PHONE_EXAMPLES: dict[str, str] = {
+    "33": "33601020304",
+    "351": "351609875678",
+}
+
 
 @dataclasses.dataclass
 class DemoClient:
@@ -157,8 +163,10 @@ def _validate_country_specific(phone_digits: str, *, label: str) -> None:
     subscriber_length = len(phone_digits) - len(country_code)
     expected_subscriber_length = COUNTRY_PHONE_RULES[country_code]
     if subscriber_length != expected_subscriber_length:
+        example = COUNTRY_PHONE_EXAMPLES.get(country_code)
+        example_hint = f" (ex : {example})" if example else ""
         raise ValidationError(
-            f"{label} invalide pour l'indicatif {country_code} (attendu {expected_subscriber_length} chiffres après l'indicatif).",
+            f"{label} invalide pour l'indicatif {country_code} : indiquez {expected_subscriber_length} chiffres après l'indicatif{example_hint}.",
             details={
                 "value": phone_digits,
                 "country_code": country_code,
@@ -968,6 +976,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                             do_create_client(args_client, store, logger)
                         except CLIError as exc:
                             logger.error("Erreur création client: %s", exc)
+                            print(f"\n❌ Impossible de créer le client : {exc}\n")
                         continue
 
                     if sub_choice == "2":
