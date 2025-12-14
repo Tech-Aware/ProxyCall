@@ -205,6 +205,11 @@ class ClientStore:
     def list_all(self) -> list[DemoClient]:
         raise NotImplementedError
 
+    def max_client_id(self) -> int:
+        """Retourne le plus grand identifiant connu, ou 0 si aucun."""
+
+        raise NotImplementedError
+
 
 class MockJsonStore(ClientStore):
     def __init__(self, path: Path, logger: logging.Logger):
@@ -313,6 +318,16 @@ class MockJsonStore(ClientStore):
             except ValidationError:
                 continue
         return clients
+
+    def max_client_id(self) -> int:
+        max_id = 0
+        for r in self._load():
+            try:
+                cid = parse_client_id(r.get("client_id"))
+            except ValidationError:
+                continue
+            max_id = max(max_id, cid)
+        return max_id
 
 
 class SheetsStore(ClientStore):
@@ -496,6 +511,16 @@ class SheetsStore(ClientStore):
                 continue
         return clients
 
+    def max_client_id(self) -> int:
+        max_id = 0
+        for r in self._all_records():
+            try:
+                cid = parse_client_id(r.get("client_id", ""))
+            except ValidationError:
+                continue
+            max_id = max(max_id, cid)
+        return max_id
+
 
 # =========================
 # Twilio (LIVE)
@@ -576,16 +601,16 @@ def parse_client_id(value: str | int) -> int:
 
 
 def compute_next_client_id(store: ClientStore) -> int:
-    """Génère un nouvel ID client en incrémentant le dernier entier connu."""
+    """Génère un nouvel ID client en incrémentant le dernier entier connu.
 
-    max_num = 0
+    On s'appuie exclusivement sur la colonne ``client_id`` pour éviter qu'une
+    ligne partiellement invalide (ex: numéro mal formé) ne soit ignorée.
+    """
 
-    for client in store.list_all():
-        try:
-            num = parse_client_id(client.client_id)
-        except ValidationError:
-            continue
-        max_num = max(max_num, num)
+    try:
+        max_num = store.max_client_id()
+    except Exception:
+        max_num = 0
 
     return max_num + 1
 

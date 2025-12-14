@@ -67,7 +67,7 @@ Le CLI va :
    - `2` Simuler un appel autorisé (même indicatif pays)
    - `3` Simuler un appel bloqué (indicatif différent)
 
-Les entrées par défaut sont préremplies (ex : `33900000000` pour le proxy mock). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante) sans saisie obligatoire.
+Les entrées par défaut sont préremplies (ex : `33900000000` pour le proxy mock). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante dans le Sheet) sans saisie obligatoire, même si certaines lignes contiennent des données partielles.
 
 ℹ️ Si vous choisissez le mode **LIVE** sans avoir renseigné les variables d’environnement requises, le CLI vous proposera automatiquement de basculer en mode **MOCK** afin de continuer la démonstration sans erreur.
 
