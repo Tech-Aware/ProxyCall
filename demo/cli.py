@@ -545,11 +545,23 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
 
     # LIVE: requires Sheets config
     sheet_name = ensure_env("GOOGLE_SHEET_NAME")
-    sa_file = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
+    sa_env = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
+    sa_file = Path(sa_env).expanduser()
+
+    # Si le chemin est relatif, on l'interprète depuis la racine du dépôt pour les utilisateurs
+    # qui lancent le script ailleurs (ex: PyCharm). Cela évite l'erreur "Fichier introuvable".
+    if not sa_file.is_absolute():
+        repo_root = Path(__file__).resolve().parent.parent
+        candidate = repo_root / sa_file
+        if candidate.exists():
+            sa_file = candidate
+
+    sa_file = sa_file.resolve()
+
     worksheet = os.getenv("GOOGLE_CLIENTS_WORKSHEET", "Clients")
     return SheetsStore(
         sheet_name=sheet_name,
-        service_account_file=sa_file,
+        service_account_file=str(sa_file),
         worksheet=worksheet,
         logger=logger,
     )

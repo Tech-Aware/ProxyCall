@@ -46,6 +46,7 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 - Le contenu de ce dossier est orienté **présentation** : il vise à montrer le fonctionnement et la valeur, pas à détailler toute l’implémentation.
 - Les secrets (Twilio, Google) doivent rester hors du dépôt (fichier `.env`, clé de service account, etc.).
 - Le CLI charge automatiquement un fichier `.env` à la racine du repo (et tout `.env` détecté via `find_dotenv`), ce qui permet de tester le mode LIVE sans exporter manuellement les variables.
+- Le chemin vers le fichier **service account** peut être donné relativement à la racine du dépôt (pratique depuis PyCharm ou un autre répertoire).
 
 ## Lancer la démo pour un utilisateur non averti
 
