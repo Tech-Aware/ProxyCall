@@ -126,9 +126,11 @@ E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")  # pragmatic E.164 check
 class DemoClient:
     client_id: str
     client_name: str
-    phone_real: str
-    phone_proxy: str
-    country_code: str
+    client_mail: str
+    client_real_phone: str
+    client_proxy_number: str
+    client_iso_residency: str
+    client_country_code: str
 
 
 def normalize_e164_like(phone: str) -> str:
@@ -214,7 +216,7 @@ class MockJsonStore(ClientStore):
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
         p = normalize_e164_like(proxy_number)
         for r in self._load():
-            if normalize_e164_like(r.get("phone_proxy", "")) == p:
+            if normalize_e164_like(r.get("client_proxy_number", "")) == p:
                 return DemoClient(**r)
         return None
 
@@ -230,7 +232,15 @@ class SheetsStore(ClientStore):
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    HEADERS = ["client_id", "client_name", "phone_real", "phone_proxy", "country_code"]
+    HEADERS = [
+        "client_id",
+        "client_name",
+        "client_mail",
+        "client_real_phone",
+        "client_proxy_number",
+        "client_iso_residency",
+        "client_country_code",
+    ]
 
     def __init__(self, *, sheet_name: str, service_account_file: str, worksheet: str, logger: logging.Logger):
         if gspread is None or Credentials is None:
@@ -286,22 +296,26 @@ class SheetsStore(ClientStore):
                 return DemoClient(
                     client_id=str(r.get("client_id", "")),
                     client_name=str(r.get("client_name", "")),
-                    phone_real=str(r.get("phone_real", "")),
-                    phone_proxy=str(r.get("phone_proxy", "")),
-                    country_code=str(r.get("country_code", "")),
+                    client_mail=str(r.get("client_mail", "")),
+                    client_real_phone=str(r.get("client_real_phone", "")),
+                    client_proxy_number=str(r.get("client_proxy_number", "")),
+                    client_iso_residency=str(r.get("client_iso_residency", "")),
+                    client_country_code=str(r.get("client_country_code", "")),
                 )
         return None
 
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
         p = normalize_e164_like(proxy_number)
         for r in self._all_records():
-            if normalize_e164_like(str(r.get("phone_proxy", ""))) == p:
+            if normalize_e164_like(str(r.get("client_proxy_number", ""))) == p:
                 return DemoClient(
                     client_id=str(r.get("client_id", "")),
                     client_name=str(r.get("client_name", "")),
-                    phone_real=str(r.get("phone_real", "")),
-                    phone_proxy=str(r.get("phone_proxy", "")),
-                    country_code=str(r.get("country_code", "")),
+                    client_mail=str(r.get("client_mail", "")),
+                    client_real_phone=str(r.get("client_real_phone", "")),
+                    client_proxy_number=str(r.get("client_proxy_number", "")),
+                    client_iso_residency=str(r.get("client_iso_residency", "")),
+                    client_country_code=str(r.get("client_country_code", "")),
                 )
         return None
 
@@ -313,12 +327,32 @@ class SheetsStore(ClientStore):
             for i, r in enumerate(records, start=2):
                 if str(r.get("client_id", "")).strip() == client.client_id:
                     self.ws.update(
-                        f"A{i}:E{i}",
-                        [[client.client_id, client.client_name, client.phone_real, client.phone_proxy, client.country_code]],
+                        f"A{i}:G{i}",
+                        [
+                            [
+                                client.client_id,
+                                client.client_name,
+                                client.client_mail,
+                                client.client_real_phone,
+                                client.client_proxy_number,
+                                client.client_iso_residency,
+                                client.client_country_code,
+                            ]
+                        ],
                     )
                     return
 
-            self.ws.append_row([client.client_id, client.client_name, client.phone_real, client.phone_proxy, client.country_code])
+            self.ws.append_row(
+                [
+                    client.client_id,
+                    client.client_name,
+                    client.client_mail,
+                    client.client_real_phone,
+                    client.client_proxy_number,
+                    client.client_iso_residency,
+                    client.client_country_code,
+                ]
+            )
         except Exception as e:
             raise ExternalServiceError("Erreur écriture Sheets (save).") from e
 
@@ -387,7 +421,10 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     client_name = (args.name or "").strip()
     if not client_name:
         raise ValidationError("--name requis.")
-    phone_real = validate_e164(args.phone_real, "phone_real")
+    client_mail = (args.client_mail or "").strip()
+    if not client_mail:
+        raise ValidationError("--client-mail requis.")
+    client_real_phone = validate_e164(args.client_real_phone, "client_real_phone")
 
     existing = store.get_by_id(client_id)
     if existing:
@@ -395,7 +432,12 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
         print(json.dumps(dataclasses.asdict(existing), indent=2, ensure_ascii=False))
         return 0
 
-    cc = extract_country_code_simple(phone_real)
+    cc = extract_country_code_simple(client_real_phone)
+    iso_residency = (args.client_iso_residency or "").strip() or cc.replace("+", "")
+    iso_residency = iso_residency.upper()
+    country_code = (args.client_country_code or "").strip() or cc
+    if country_code and not country_code.startswith("+"):
+        country_code = "+" + country_code
 
     if args.mode == "mock":
         proxy = make_proxy_mock(client_id, cc)
@@ -416,9 +458,11 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     client = DemoClient(
         client_id=client_id,
         client_name=client_name,
-        phone_real=phone_real,
-        phone_proxy=normalize_e164_like(proxy),
-        country_code=cc,
+        client_mail=client_mail,
+        client_real_phone=client_real_phone,
+        client_proxy_number=normalize_e164_like(proxy),
+        client_iso_residency=iso_residency,
+        client_country_code=country_code,
     )
     store.save(client)
 
@@ -446,13 +490,18 @@ def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: loggi
         raise NotFoundError("Proxy inconnu (aucun client associé).", details={"proxy": proxy})
 
     caller_cc = extract_country_code_simple(caller)
-    if client.country_code and caller_cc != client.country_code:
+    if client.client_country_code and caller_cc != client.client_country_code:
         logger.warning("Routage refusé (country mismatch).")
         print(twiml_block("Sorry, calls are only allowed from the same country."))
         return 0
 
     logger.info("Routage autorisé (Dial vers phone_real).")
-    print(twiml_dial(proxy_number=normalize_e164_like(client.phone_proxy), real_number=normalize_e164_like(client.phone_real)))
+    print(
+        twiml_dial(
+            proxy_number=normalize_e164_like(client.client_proxy_number),
+            real_number=normalize_e164_like(client.client_real_phone),
+        )
+    )
     return 0
 
 
@@ -467,7 +516,10 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
     args2 = argparse.Namespace(
         client_id=args.client_id,
         name=args.name,
-        phone_real=args.phone_real,
+        client_mail=args.client_mail,
+        client_real_phone=args.client_real_phone,
+        client_iso_residency=args.client_iso_residency,
+        client_country_code=args.client_country_code,
         mode=args.mode,
     )
     do_create_client(args2, store, logger)
@@ -480,7 +532,7 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
     out = {
         "order_id": order_id,
         "client_id": client.client_id,
-        "proxy_number_to_share": client.phone_proxy,
+        "proxy_number_to_share": client.client_proxy_number,
     }
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
@@ -511,7 +563,10 @@ def build_parser() -> argparse.ArgumentParser:
     c1 = sp.add_parser("create-client", help="Crée (ou affiche si existe) un client + proxy.")
     c1.add_argument("--client-id", required=True)
     c1.add_argument("--name", required=True)
-    c1.add_argument("--phone-real", required=True)
+    c1.add_argument("--client-mail", required=True)
+    c1.add_argument("--client-real-phone", required=True)
+    c1.add_argument("--client-iso-residency", default="")
+    c1.add_argument("--client-country-code", default="")
 
     c2 = sp.add_parser("lookup", help="Retrouve un client à partir du proxy.")
     c2.add_argument("--proxy", required=True)
@@ -524,7 +579,10 @@ def build_parser() -> argparse.ArgumentParser:
     c4.add_argument("--order-id", required=True)
     c4.add_argument("--client-id", required=True)
     c4.add_argument("--name", required=True)
-    c4.add_argument("--phone-real", required=True)
+    c4.add_argument("--client-mail", required=True)
+    c4.add_argument("--client-real-phone", required=True)
+    c4.add_argument("--client-iso-residency", default="")
+    c4.add_argument("--client-country-code", default="")
 
     return p
 
@@ -607,11 +665,17 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                 logger.info("Menu 1: création/affichage client demandé.")
                 client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
                 name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
-                phone_real = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
+                client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"
+                client_real_phone = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
+                iso_residency = input("ISO pays de résidence (ex: FR) : ").strip() or "FR"
+                client_country_code = extract_country_code_simple(client_real_phone)
                 args_client = argparse.Namespace(
                     client_id=client_id,
                     name=name,
-                    phone_real=phone_real,
+                    client_mail=client_mail,
+                    client_real_phone=client_real_phone,
+                    client_iso_residency=iso_residency,
+                    client_country_code=client_country_code,
                     mode=args.mode,
                 )
                 try:

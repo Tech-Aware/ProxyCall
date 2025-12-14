@@ -66,7 +66,10 @@ def run_mock_client_journey(fixtures_path: Path | str = Path("demo/fixtures/clie
         args_create = argparse.Namespace(
             client_id="demo-client",
             name="Client Démo",
-            phone_real="+33123456789",
+            client_mail="demo@example.com",
+            client_real_phone="+33123456789",
+            client_iso_residency="FR",
+            client_country_code="+33",
             mode="mock",
         )
         with _capture_stdout() as buf_create:
