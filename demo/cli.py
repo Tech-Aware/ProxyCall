@@ -151,6 +151,8 @@ COUNTRY_PHONE_EXAMPLES: dict[str, str] = {
     "351": "351609875678",
 }
 
+POOL_FIXTURES_DEFAULT = Path(__file__).parent / "fixtures" / "pools.json"
+
 
 @dataclasses.dataclass
 class DemoClient:
@@ -272,6 +274,17 @@ class ClientStore:
     def max_client_id(self) -> int:
         """Retourne le plus grand identifiant connu, ou 0 si aucun."""
 
+        raise NotImplementedError
+
+
+class PoolStore:
+    def list_available(self, country_iso: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str) -> list[str]:
+        raise NotImplementedError
+
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str) -> str:
         raise NotImplementedError
 
 
@@ -413,6 +426,144 @@ class MockJsonStore(ClientStore):
             max_id = max(max_id, cid)
         return max_id
 
+
+class MockPoolStore(PoolStore):
+    PREFIXES = {
+        "FR": "+339000",
+        "US": "+155500",
+    }
+
+    def __init__(self, path: Path, logger: logging.Logger, *, default_batch: int = 2):
+        self.path = path
+        self.logger = logger
+        self.default_batch = default_batch
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.exists():
+            seed = [
+                {
+                    "country_iso": "FR",
+                    "phone_number": "+33900000001",
+                    "status": "available",
+                    "friendly_name": "Pool-FR-1",
+                    "date_achat": dt.datetime.utcnow().isoformat(),
+                    "date_attribution": "",
+                    "attribution_to_client_name": "",
+                },
+                {
+                    "country_iso": "US",
+                    "phone_number": "+15550000001",
+                    "status": "available",
+                    "friendly_name": "Pool-US-1",
+                    "date_achat": dt.datetime.utcnow().isoformat(),
+                    "date_attribution": "",
+                    "attribution_to_client_name": "",
+                },
+            ]
+            self.path.write_text(json.dumps(seed, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _load(self) -> list[dict[str, Any]]:
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ExternalServiceError("Fixtures pool corrompues.", details={"path": str(self.path)}) from exc
+
+    def _dump(self, rows: list[dict[str, Any]]) -> None:
+        self.path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _make_number(self, country_iso: str, index: int) -> str:
+        prefix = self.PREFIXES.get(country_iso.upper(), f"+999{country_iso.upper()}")
+        return f"{prefix}{index:05d}"
+
+    def list_available(self, country_iso: str) -> list[dict[str, Any]]:
+        country = country_iso.upper()
+        return [rec for rec in self._load() if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available"]
+
+    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str) -> list[str]:
+        country = country_iso.upper()
+        rows = self._load()
+        existing = [r for r in rows if r.get("country_iso") == country]
+        start_idx = len(existing) + 1
+        added: list[str] = []
+
+        for offset in range(batch_size):
+            num = self._make_number(country, start_idx + offset)
+            rows.append(
+                {
+                    "country_iso": country,
+                    "phone_number": num,
+                    "status": "available",
+                    "friendly_name": f"{friendly_prefix}-{offset + 1}",
+                    "date_achat": dt.datetime.utcnow().isoformat(),
+                    "date_attribution": "",
+                    "attribution_to_client_name": "",
+                }
+            )
+            added.append(num)
+
+        self._dump(rows)
+        self.logger.info("Pool mock approvisionné", extra={"country": country, "count": batch_size})
+        return added
+
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str) -> str:
+        country = country_iso.upper()
+        rows = self._load()
+        available_idx = None
+        for idx, rec in enumerate(rows):
+            if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available":
+                available_idx = idx
+                break
+
+        if available_idx is None:
+            self.provision(country, self.default_batch, friendly_prefix=f"Pool-{country}")
+            rows = self._load()
+            for idx, rec in enumerate(rows):
+                if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available":
+                    available_idx = idx
+                    break
+
+        if available_idx is None:
+            raise ExternalServiceError(f"Aucun numéro disponible pour le pays {country} (mock)")
+
+        target = rows[available_idx]
+        target.update(
+            {
+                "status": "assigned",
+                "friendly_name": friendly_name,
+                "date_attribution": dt.datetime.utcnow().isoformat(),
+                "attribution_to_client_name": client_name,
+            }
+        )
+        rows[available_idx] = target
+        self._dump(rows)
+        return str(target.get("phone_number"))
+
+
+class LivePoolStore(PoolStore):
+    def __init__(self, logger: logging.Logger, *, default_batch: int = 2):
+        self.logger = logger
+        self.default_batch = default_batch
+
+    def list_available(self, country_iso: str) -> list[dict[str, Any]]:
+        from integrations.twilio_client import TwilioClient
+
+        return TwilioClient.list_available(country_iso.upper())
+
+    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str) -> list[str]:
+        from integrations.twilio_client import TwilioClient
+
+        TwilioClient.fill_pool(country_iso.upper(), batch_size)
+        self.logger.info("Pool Twilio approvisionné", extra={"country": country_iso, "count": batch_size})
+        refreshed = TwilioClient.list_available(country_iso.upper())
+        return [r.get("phone_number", "") for r in refreshed if str(r.get("status", "")).lower() == "available"]
+
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str) -> str:
+        from integrations.twilio_client import TwilioClient
+
+        return TwilioClient.buy_number_for_client(
+            friendly_name=friendly_name,
+            country=country_iso.upper(),
+            attribution_to_client_name=client_name,
+        )
 
 class SheetsStore(ClientStore):
     SCOPES = [
@@ -840,6 +991,53 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
     return 0
 
 
+def do_pool_list(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
+    country = (args.country or "FR").upper()
+    rows = pool_store.list_available(country)
+    logger.info("Pool interrogé", extra={"country": country, "available": len(rows)})
+    if not rows:
+        print(f"Aucun numéro disponible pour {country}.")
+        return 0
+
+    print(f"Numéros disponibles pour {country} ({len(rows)}) :")
+    for rec in rows:
+        print(f"- {rec.get('phone_number')} (friendly_name={rec.get('friendly_name', '')})")
+    return 0
+
+
+def do_pool_provision(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
+    country = (args.country or "FR").upper()
+    batch_size = max(1, int(args.batch_size or 1))
+    added = pool_store.provision(country, batch_size, friendly_prefix=f"Pool-{country}")
+    logger.info("Approvisionnement terminé", extra={"country": country, "count": len(added)})
+    print(json.dumps({"country": country, "added": added}, indent=2, ensure_ascii=False))
+    return 0
+
+
+def do_pool_assign(
+    args: argparse.Namespace,
+    store: ClientStore,
+    pool_store: PoolStore,
+    logger: logging.Logger,
+) -> int:
+    client_id = parse_client_id(args.client_id)
+    client = store.get_by_id(client_id)
+    if not client:
+        raise NotFoundError("Client introuvable pour attribution depuis le pool.")
+    if client.client_proxy_number:
+        raise ValidationError("Le client possède déjà un proxy.")
+
+    country = (args.country or "FR").upper()
+    friendly = args.friendly_name or f"Client-{client_id}"
+    proxy = pool_store.assign_number(country, friendly, client.client_name)
+
+    client.client_proxy_number = normalize_phone_digits(proxy, label="proxy")
+    store.save(client)
+    logger.info("Proxy attribué depuis le pool", extra={"client_id": client_id, "proxy": proxy})
+    print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
+    return 0
+
+
 # =========================
 # CLI wiring
 # =========================
@@ -852,6 +1050,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixtures",
         default=str((Path(__file__).parent / "fixtures" / "clients.json").resolve()),
         help="Chemin fixtures JSON (mode mock).",
+    )
+    p.add_argument(
+        "--pools-fixtures",
+        default=str(POOL_FIXTURES_DEFAULT.resolve()),
+        help="Chemin fixtures pool (mode mock).",
     )
 
     mode = p.add_mutually_exclusive_group()
@@ -882,6 +1085,27 @@ def build_parser() -> argparse.ArgumentParser:
     c4.add_argument("--name", required=True)
     c4.add_argument("--client-mail", required=True)
     c4.add_argument("--client-real-phone", required=True)
+
+    c5 = sp.add_parser(
+        "pool-list",
+        help="Liste les numéros disponibles dans le pool (par pays).",
+    )
+    c5.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
+
+    c6 = sp.add_parser(
+        "pool-provision",
+        help="Approvisionne le pool en achetant des numéros (mock ou live).",
+    )
+    c6.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
+    c6.add_argument("--batch-size", type=int, default=int(os.getenv("TWILIO_POOL_SIZE", "2")))
+
+    c7 = sp.add_parser(
+        "pool-assign",
+        help="Attribue un numéro du pool à un client existant (et met à jour sa fiche).",
+    )
+    c7.add_argument("--client-id", required=True)
+    c7.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
+    c7.add_argument("--friendly-name", required=False, help="Libellé Twilio/friendly name.")
 
     return p
 
@@ -937,7 +1161,14 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
     )
 
 
-def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
+def make_pool_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> PoolStore:
+    batch_size = int(os.getenv("TWILIO_POOL_SIZE", "2"))
+    if mode == "mock":
+        return MockPoolStore(Path(args.pools_fixtures), logger=logger, default_batch=batch_size)
+    return LivePoolStore(logger=logger, default_batch=batch_size)
+
+
+def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: PoolStore, logger: logging.Logger) -> int:
     try:
         print("\n=== ProxyCall DEMO ===")
         print(
@@ -951,6 +1182,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
             print("  1) Gérer un client (créer / rechercher / attribuer un proxy)")
             print("  2) Simuler un appel autorisé (même indicatif pays)")
             print("  3) Simuler un appel bloqué (indicatif différent)")
+            print("  4) Gérer le pool de numéros (approvisionnement / attribution)")
             print("  0) Quitter")
 
             choice = input("Votre sélection : ").strip() or "0"
@@ -1093,8 +1325,62 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                     logger.error("Erreur simulation appel bloqué: %s", exc)
                 continue
 
+            if choice == "4":
+                logger.info("Menu 4: gestion du pool.")
+                while True:
+                    print("\nPool de numéros :")
+                    print("  1) Lister les numéros disponibles par pays")
+                    print("  2) Approvisionner le pool")
+                    print("  3) Attribuer un numéro du pool à un client")
+                    print("  0) Retour au menu principal")
+                    pool_choice = input("Votre sélection : ").strip() or "0"
+
+                    if pool_choice == "0":
+                        break
+
+                    if pool_choice == "1":
+                        country = input("Pays ISO (ex: FR) : ").strip() or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
+                        args_pool = argparse.Namespace(country=country)
+                        try:
+                            do_pool_list(args_pool, pool_store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur listing pool: %s", exc)
+                        continue
+
+                    if pool_choice == "2":
+                        country = input("Pays ISO (ex: FR) : ").strip() or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
+                        batch_raw = input("Combien de numéros acheter ? (2 par défaut) : ").strip() or "2"
+                        try:
+                            batch_size = int(batch_raw)
+                        except ValueError:
+                            print("Merci d'indiquer un entier.\n")
+                            continue
+                        args_pool = argparse.Namespace(country=country, batch_size=batch_size)
+                        try:
+                            do_pool_provision(args_pool, pool_store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur approvisionnement pool: %s", exc)
+                        continue
+
+                    if pool_choice == "3":
+                        client_raw = input("ID client pour attribution : ").strip()
+                        if not client_raw:
+                            print("Merci de renseigner un ID client.\n")
+                            continue
+                        country = input("Pays ISO (ex: FR) : ").strip() or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
+                        friendly = input("Friendly name (optionnel) : ").strip()
+                        args_pool = argparse.Namespace(client_id=client_raw, country=country, friendly_name=friendly)
+                        try:
+                            do_pool_assign(args_pool, store, pool_store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur attribution pool: %s", exc)
+                        continue
+
+                    print("Merci de choisir 0, 1, 2 ou 3.\n")
+                continue
+
             logger.warning("Choix inconnu: %s", choice)
-            print("Veuillez choisir 0, 1, 2 ou 3.\n")
+            print("Veuillez choisir 0, 1, 2, 3 ou 4.\n")
     except Exception as exc:  # pragma: no cover - boucle interactive
         logger.exception("Erreur inattendue dans le menu interactif: %s", exc)
         return 4
@@ -1117,6 +1403,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         try:
             store = make_store(mode, args, logger)
+            pool_store = make_pool_store(mode, args, logger)
         except ConfigError as exc:
             logger.error(str(exc))
             if args.cmd is None and mode == "live":
@@ -1132,6 +1419,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     ctx = {"mode": mode, "cmd": args.cmd or "menu"}
                     logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
                     store = make_store(mode, args, logger)
+                    pool_store = make_pool_store(mode, args, logger)
                 else:
                     return exc.exit_code
             else:
@@ -1140,7 +1428,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.mode = mode
 
         if args.cmd is None:
-            return interactive_menu(args, store, logger)
+            return interactive_menu(args, store, pool_store, logger)
 
         if args.cmd == "create-client":
             args.assign_proxy = not args.no_proxy
@@ -1153,6 +1441,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "create-order":
             args.mode = mode
             return do_create_order(args, store, logger)
+        if args.cmd == "pool-list":
+            return do_pool_list(args, pool_store, logger)
+        if args.cmd == "pool-provision":
+            return do_pool_provision(args, pool_store, logger)
+        if args.cmd == "pool-assign":
+            return do_pool_assign(args, store, pool_store, logger)
 
         raise ValidationError("Commande inconnue.")
     except CLIError as e:

@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from twilio.rest import Client as TwilioRest
+
 from app.config import settings
 from repositories.pools_repository import PoolsRepository
 
@@ -42,6 +43,18 @@ class TwilioClient:
                 friendly_name=friendly,
                 date_achat=datetime.utcnow().isoformat(),
             )
+
+    @classmethod
+    def fill_pool(cls, country: str, batch_size: int) -> None:
+        """Rend disponible un lot de numéros pour le pays demandé."""
+
+        cls._fill_pool(country, batch_size)
+
+    @classmethod
+    def list_available(cls, country: str):
+        """Expose les entrées disponibles du pool côté Google Sheets."""
+
+        return PoolsRepository.list_available(country)
 
     @classmethod
     def buy_number_for_client(
