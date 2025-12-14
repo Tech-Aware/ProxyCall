@@ -1,4 +1,5 @@
 import logging
+from app.config import settings
 from models.client import Client
 from repositories.clients_repository import ClientsRepository
 from integrations.twilio_client import TwilioClient
@@ -64,9 +65,13 @@ class ClientsService:
             raise ClientAlreadyExistsError(f"Client {client_id} existe déjà.")
 
         cc = extract_country_code(client_real_phone)
+        proxy_country = client_iso_residency or settings.TWILIO_PHONE_COUNTRY
+
         try:
             proxy = TwilioClient.buy_number_for_client(
-                friendly_name=f"Client-{client_id}"
+                friendly_name=f"Client-{client_id}",
+                country=proxy_country,
+                attribution_to_client_name=client_name,
             )
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception("Erreur lors de l'achat du numéro proxy", exc_info=exc)
