@@ -121,6 +121,13 @@ def setup_logging(level: str, *, json_logs: bool, ctx: dict[str, Any]) -> loggin
 # =========================
 PHONE_DIGITS_RE = re.compile(r"^[0-9]{8,15}$")  # 8 à 15 chiffres, sans signe +
 
+# Règles de validation spécifiques par indicatif : indicatif -> longueur du numéro local
+# (hors indicatif). Ces règles sont appliquées uniquement si l'indicatif est reconnu.
+COUNTRY_PHONE_RULES: dict[str, int] = {
+    "33": 9,   # France : 9 chiffres après l'indicatif (ex: 33 601020304)
+    "351": 9,  # Portugal : 9 chiffres après l'indicatif (ex: 351 609875678)
+}
+
 
 @dataclasses.dataclass
 class DemoClient:
@@ -131,6 +138,33 @@ class DemoClient:
     client_proxy_number: Optional[int]
     client_iso_residency: str
     client_country_code: str
+
+
+def _detect_country_code(phone_digits: str) -> Optional[str]:
+    """Détecte l'indicatif en privilégiant le plus long préfixe connu."""
+
+    matches = [cc for cc in COUNTRY_PHONE_RULES if phone_digits.startswith(cc)]
+    if not matches:
+        return None
+    return max(matches, key=len)
+
+
+def _validate_country_specific(phone_digits: str, *, label: str) -> None:
+    country_code = _detect_country_code(phone_digits)
+    if not country_code:
+        return
+
+    subscriber_length = len(phone_digits) - len(country_code)
+    expected_subscriber_length = COUNTRY_PHONE_RULES[country_code]
+    if subscriber_length != expected_subscriber_length:
+        raise ValidationError(
+            f"{label} invalide pour l'indicatif {country_code} (attendu {expected_subscriber_length} chiffres après l'indicatif).",
+            details={
+                "value": phone_digits,
+                "country_code": country_code,
+                "expected_subscriber_length": expected_subscriber_length,
+            },
+        )
 
 
 def normalize_phone_digits(phone: str | int, *, label: str = "numéro") -> int:
@@ -149,6 +183,8 @@ def normalize_phone_digits(phone: str | int, *, label: str = "numéro") -> int:
     if not PHONE_DIGITS_RE.match(raw):
         raise ValidationError(f"{label} invalide (8 à 15 chiffres attendus).", details={"value": raw})
 
+    _validate_country_specific(raw, label=label)
+
     return int(raw)
 
 
@@ -165,6 +201,9 @@ def extract_country_code_simple(phone: int | str) -> str:
     """Renvoie l'indicatif pays basique (premiers chiffres)."""
 
     digits = phone_digits_to_str(phone)
+    detected = _detect_country_code(digits)
+    if detected:
+        return detected
     return digits[:2]
 
 
