@@ -99,20 +99,14 @@ def run_mock_client_journey(fixtures_path: Path | str = Path("demo/fixtures/clie
 
 
 def cli_command_examples(fixtures_path: Path | str = Path("demo/fixtures/clients.json")) -> List[str]:
-    """Fournit des exemples de commandes CLI prêtes à copier-coller."""
+    """Fournit la commande unique pour lancer le menu interactif."""
     try:
         path_str = str(fixtures_path)
-        LOGGER.info("Génération des commandes CLI démo (fixtures=%s).", path_str)
+        LOGGER.info("Commande de lancement CLI (fixtures=%s).", path_str)
         base = f"python -m demo.cli --mock --fixtures {path_str}"
-        commands = [
-            f"{base} create-client --client-id demo-client --name 'Client Démo' --phone-real +33123456789",
-            f"{base} lookup --proxy +33900000000",
-            f"{base} simulate-call --from +33111111111 --to +33900000000",
-            f"{base} simulate-call --from +442222222222 --to +33900000000",
-        ]
-        return commands
+        return [f"{base}  # puis répondre 1/2/3/4 dans le menu interactif"]
     except Exception as exc:
-        LOGGER.exception("Impossible de préparer les commandes de démo: %s", exc)
+        LOGGER.exception("Impossible de préparer la commande de démo: %s", exc)
         raise
 
 

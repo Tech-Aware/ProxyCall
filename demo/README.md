@@ -48,37 +48,29 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 
 ## Démarrer une démo mock rapidement
 
-Les commandes suivantes permettent de présenter le parcours complet sans dépendances externes en s’appuyant sur les fixtures du dossier `demo/fixtures` :
+Lancez simplement le CLI puis répondez aux menus (1, 2, 3, 4…) pour être guidé :
 
 ```bash
-# 1) Création (idempotente) d’un client démo + proxy
-python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
-  create-client --client-id demo-client --name "Client Démo" --phone-real +33123456789
-
-# 2) Lookup du client depuis le proxy
-python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
-  lookup --proxy +33900000000
-
-# 3) Simulation d’appel autorisé (même indicatif pays)
-python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
-  simulate-call --from +33111111111 --to +33900000000
-
-# 4) Simulation d’appel refusé (indicatif différent)
-python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
-  simulate-call --from +442222222222 --to +33900000000
+python -m demo.cli --mock --fixtures demo/fixtures/clients.json
 ```
 
-Si vous préférez déclencher ces étapes depuis Python (pour afficher le rendu dans un notebook ou un script interne), utilisez les helpers de `demo/scenarios.py` :
+Déroulé proposé (tout est indiqué à l’écran) :
+
+1. Choisir le **mode** (simulé/mock ou live)
+2. Menu `1` pour créer/afficher un client démo (idempotent)
+3. Menu `2` pour faire un lookup par numéro proxy
+4. Menu `3` pour simuler un appel autorisé (même indicatif pays)
+5. Menu `4` pour simuler un appel bloqué (indicatif différent)
+
+Les entrées par défaut sont préremplies (ex : `demo-client`, `+33900000000`) afin de pouvoir enchaîner très vite lors d’une démo live.
+
+Si vous préférez déclencher ces étapes depuis Python (pour afficher le rendu dans un notebook ou un script interne), utilisez le helper `run_mock_client_journey` de `demo/scenarios.py` :
 
 ```python
-from demo.scenarios import run_mock_client_journey, cli_command_examples
+from demo.scenarios import run_mock_client_journey
 
 outputs = run_mock_client_journey()
 for step, stdout in outputs.items():
     print(f"\n=== {step} ===")
     print(stdout)
-
-print("\nCommandes prêtes à l’emploi :")
-for cmd in cli_command_examples():
-    print(cmd)
 ```

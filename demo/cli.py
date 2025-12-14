@@ -472,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
     mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
 
-    sp = p.add_subparsers(dest="cmd", required=True)
+    sp = p.add_subparsers(dest="cmd", required=False)
 
     c1 = sp.add_parser("create-client", help="Crée (ou affiche si existe) un client + proxy.")
     c1.add_argument("--client-id", required=True)
@@ -496,10 +496,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def select_mode(args: argparse.Namespace) -> str:
-    if args.live:
-        return "live"
-    # default mock
-    return "mock"
+    try:
+        if args.live:
+            return "live"
+        if args.mock:
+            return "mock"
+
+        print("Choix du mode de démonstration :")
+        print("  1) Démo simulée (MOCK)")
+        print("  2) Démo live (LIVE)")
+
+        while True:
+            user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
+            if user_choice == "1":
+                return "mock"
+            if user_choice == "2":
+                return "live"
+            print("Merci de répondre par 1 ou 2.")
+    except Exception as exc:  # pragma: no cover - interaction console
+        LOGGER.exception("Échec lors du choix de mode interactif: %s", exc)
+        raise
 
 
 def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
@@ -518,17 +534,98 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
     )
 
 
+def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
+    try:
+        print("\n=== ProxyCall DEMO ===")
+        print("Répondez simplement par le numéro du menu. Tapez 0 pour quitter.\n")
+
+        while True:
+            print("Menu principal :")
+            print("  1) Créer/afficher un client démo")
+            print("  2) Lookup via numéro proxy")
+            print("  3) Simuler un appel autorisé (même indicatif)")
+            print("  4) Simuler un appel bloqué (indicatif différent)")
+            print("  0) Quitter")
+
+            choice = input("Votre sélection : ").strip() or "0"
+
+            if choice == "0":
+                logger.info("Fin de la démo interactive.")
+                print("Au revoir !")
+                return 0
+
+            if choice == "1":
+                logger.info("Menu 1: création/affichage client demandé.")
+                client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
+                name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
+                phone_real = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
+                args_client = argparse.Namespace(
+                    client_id=client_id,
+                    name=name,
+                    phone_real=phone_real,
+                    mode=args.mode,
+                )
+                try:
+                    do_create_client(args_client, store, logger)
+                except CLIError as exc:
+                    logger.error("Erreur création client: %s", exc)
+                continue
+
+            if choice == "2":
+                logger.info("Menu 2: lookup client demandé.")
+                proxy = input("Numéro proxy à rechercher (ex: +33900000000) : ").strip() or "+33900000000"
+                args_lookup = argparse.Namespace(proxy=proxy)
+                try:
+                    do_lookup(args_lookup, store, logger)
+                except CLIError as exc:
+                    logger.error("Erreur lookup: %s", exc)
+                continue
+
+            if choice == "3":
+                logger.info("Menu 3: simulation appel autorisé.")
+                from_number = input("Numéro appelant (même pays, ex: +33111111111) : ").strip() or "+33111111111"
+                to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
+                args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
+                try:
+                    do_simulate_call(args_call, store, logger)
+                except CLIError as exc:
+                    logger.error("Erreur simulation appel autorisé: %s", exc)
+                continue
+
+            if choice == "4":
+                logger.info("Menu 4: simulation appel bloqué.")
+                from_number = input("Numéro appelant (autre pays, ex: +442222222222) : ").strip() or "+442222222222"
+                to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
+                args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
+                try:
+                    do_simulate_call(args_call, store, logger)
+                except CLIError as exc:
+                    logger.error("Erreur simulation appel bloqué: %s", exc)
+                continue
+
+            logger.warning("Choix inconnu: %s", choice)
+            print("Veuillez choisir 0, 1, 2, 3 ou 4.\n")
+    except Exception as exc:  # pragma: no cover - boucle interactive
+        logger.exception("Erreur inattendue dans le menu interactif: %s", exc)
+        return 4
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     mode = select_mode(args)
-    ctx = {"mode": mode, "cmd": args.cmd}
+    ctx = {"mode": mode, "cmd": args.cmd or "menu"}
 
     logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
 
     try:
         store = make_store(mode, args, logger)
+
+        args.mode = mode
+
+        if args.cmd is None:
+            return interactive_menu(args, store, logger)
 
         if args.cmd == "create-client":
             args.mode = mode
