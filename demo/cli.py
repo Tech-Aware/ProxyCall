@@ -119,7 +119,7 @@ def setup_logging(level: str, *, json_logs: bool, ctx: dict[str, Any]) -> loggin
 # =========================
 # Domain model
 # =========================
-E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")  # pragmatic E.164 check
+PHONE_DIGITS_RE = re.compile(r"^[0-9]{8,15}$")  # 8 à 15 chiffres, sans signe +
 
 
 @dataclasses.dataclass
@@ -127,32 +127,45 @@ class DemoClient:
     client_id: int
     client_name: str
     client_mail: str
-    client_real_phone: str
-    client_proxy_number: str
+    client_real_phone: int
+    client_proxy_number: Optional[int]
     client_iso_residency: str
     client_country_code: str
 
 
-def normalize_e164_like(phone: str) -> str:
-    p = str(phone or "").strip().replace(" ", "")
-    if not p:
-        raise ValidationError("Numéro vide.")
-    if not p.startswith("+"):
-        p = "+" + p
-    return p
+def normalize_phone_digits(phone: str | int, *, label: str = "numéro") -> int:
+    """Normalise un numéro pour stockage : uniquement des chiffres, pas de « + ».
+
+    Accepte des entrées préfixées par "+" ou contenant des espaces, mais persiste
+    toujours un entier (ex: "+33 6 01 02 03 04" -> 33601020304).
+    """
+
+    raw = str(phone or "").strip().replace(" ", "")
+    raw = raw.lstrip("+")
+
+    if not raw:
+        raise ValidationError(f"{label} manquant.")
+
+    if not PHONE_DIGITS_RE.match(raw):
+        raise ValidationError(f"{label} invalide (8 à 15 chiffres attendus).", details={"value": raw})
+
+    return int(raw)
 
 
-def validate_e164(phone: str, label: str) -> str:
-    p = normalize_e164_like(phone)
-    if not E164_RE.match(p):
-        raise ValidationError(f"{label} invalide (attendu format E.164, ex: +33601020304).", details={"value": p})
-    return p
+def phone_digits_to_str(phone: int | str, *, label: str = "numéro") -> str:
+    return str(normalize_phone_digits(phone, label=label))
 
 
-def extract_country_code_simple(phone_e164: str) -> str:
-    # Simple (comme ton service actuel): +33, +49, +1 ...
-    p = normalize_e164_like(phone_e164)
-    return p[:3]
+def phone_digits_to_e164(phone: int | str, *, label: str = "numéro") -> str:
+    digits = phone_digits_to_str(phone, label=label)
+    return "+" + digits
+
+
+def extract_country_code_simple(phone: int | str) -> str:
+    """Renvoie l'indicatif pays basique (premiers chiffres)."""
+
+    digits = phone_digits_to_str(phone)
+    return digits[:2]
 
 
 # =========================
@@ -183,7 +196,7 @@ class ClientStore:
     def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
         raise NotImplementedError
 
-    def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
+    def get_by_proxy(self, proxy_number: str | int) -> Optional[DemoClient]:
         raise NotImplementedError
 
     def save(self, client: DemoClient) -> None:
@@ -215,12 +228,18 @@ class MockJsonStore(ClientStore):
         for r in self._load():
             try:
                 if parse_client_id(r.get("client_id")) == target:
+                    real_phone = normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone")
+                    proxy_raw = r.get("client_proxy_number", "")
+                    if proxy_raw is None or not str(proxy_raw).strip():
+                        proxy_number = None
+                    else:
+                        proxy_number = normalize_phone_digits(proxy_raw, label="client_proxy_number")
                     return DemoClient(
                         client_id=target,
                         client_name=str(r.get("client_name", "")),
                         client_mail=str(r.get("client_mail", "")),
-                        client_real_phone=str(r.get("client_real_phone", "")),
-                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_real_phone=real_phone,
+                        client_proxy_number=proxy_number,
                         client_iso_residency=str(r.get("client_iso_residency", "")),
                         client_country_code=str(r.get("client_country_code", "")),
                     )
@@ -229,19 +248,30 @@ class MockJsonStore(ClientStore):
         return None
 
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
-        p = normalize_e164_like(proxy_number)
+        try:
+            p = normalize_phone_digits(proxy_number, label="proxy")
+        except ValidationError:
+            return None
         for r in self._load():
-            if normalize_e164_like(r.get("client_proxy_number", "")) == p:
+            try:
+                proxy_raw = r.get("client_proxy_number", "")
+                if proxy_raw is None or not str(proxy_raw).strip():
+                    continue
+                proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
+            except ValidationError:
+                continue
+            if proxy_val == p:
                 try:
                     cid = parse_client_id(r.get("client_id"))
+                    real_phone = normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone")
                 except ValidationError:
                     continue
                 return DemoClient(
                     client_id=cid,
                     client_name=str(r.get("client_name", "")),
                     client_mail=str(r.get("client_mail", "")),
-                    client_real_phone=str(r.get("client_real_phone", "")),
-                    client_proxy_number=str(r.get("client_proxy_number", "")),
+                    client_real_phone=real_phone,
+                    client_proxy_number=proxy_val,
                     client_iso_residency=str(r.get("client_iso_residency", "")),
                     client_country_code=str(r.get("client_country_code", "")),
                 )
@@ -265,13 +295,17 @@ class MockJsonStore(ClientStore):
         clients: list[DemoClient] = []
         for r in self._load():
             try:
+                proxy_val = None
+                proxy_raw = r.get("client_proxy_number", "")
+                if proxy_raw is not None and str(proxy_raw).strip():
+                    proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
                 clients.append(
                     DemoClient(
                         client_id=parse_client_id(r.get("client_id")),
                         client_name=str(r.get("client_name", "")),
                         client_mail=str(r.get("client_mail", "")),
-                        client_real_phone=str(r.get("client_real_phone", "")),
-                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_real_phone=normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone"),
+                        client_proxy_number=proxy_val,
                         client_iso_residency=str(r.get("client_iso_residency", "")),
                         client_country_code=str(r.get("client_country_code", "")),
                     )
@@ -349,12 +383,18 @@ class SheetsStore(ClientStore):
         for r in self._all_records():
             try:
                 if parse_client_id(r.get("client_id", "")) == target:
+                    real_phone = normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone")
+                    proxy_raw = r.get("client_proxy_number", "")
+                    if proxy_raw is None or not str(proxy_raw).strip():
+                        proxy_number = None
+                    else:
+                        proxy_number = normalize_phone_digits(proxy_raw, label="client_proxy_number")
                     return DemoClient(
                         client_id=target,
                         client_name=str(r.get("client_name", "")),
                         client_mail=str(r.get("client_mail", "")),
-                        client_real_phone=str(r.get("client_real_phone", "")),
-                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_real_phone=real_phone,
+                        client_proxy_number=proxy_number,
                         client_iso_residency=str(r.get("client_iso_residency", "")),
                         client_country_code=str(r.get("client_country_code", "")),
                     )
@@ -363,19 +403,30 @@ class SheetsStore(ClientStore):
         return None
 
     def get_by_proxy(self, proxy_number: str) -> Optional[DemoClient]:
-        p = normalize_e164_like(proxy_number)
+        try:
+            p = normalize_phone_digits(proxy_number, label="proxy")
+        except ValidationError:
+            return None
         for r in self._all_records():
-            if normalize_e164_like(str(r.get("client_proxy_number", ""))) == p:
+            try:
+                proxy_raw = r.get("client_proxy_number", "")
+                if proxy_raw is None or not str(proxy_raw).strip():
+                    continue
+                proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
+            except ValidationError:
+                continue
+            if proxy_val == p:
                 try:
                     cid = parse_client_id(r.get("client_id", ""))
+                    real_phone = normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone")
                 except ValidationError:
                     continue
                 return DemoClient(
                     client_id=cid,
                     client_name=str(r.get("client_name", "")),
                     client_mail=str(r.get("client_mail", "")),
-                    client_real_phone=str(r.get("client_real_phone", "")),
-                    client_proxy_number=str(r.get("client_proxy_number", "")),
+                    client_real_phone=real_phone,
+                    client_proxy_number=proxy_val,
                     client_iso_residency=str(r.get("client_iso_residency", "")),
                     client_country_code=str(r.get("client_country_code", "")),
                 )
@@ -400,7 +451,7 @@ class SheetsStore(ClientStore):
                                 client.client_name,
                                 client.client_mail,
                                 client.client_real_phone,
-                                client.client_proxy_number,
+                                client.client_proxy_number or "",
                                 client.client_iso_residency,
                                 client.client_country_code,
                             ]
@@ -414,7 +465,7 @@ class SheetsStore(ClientStore):
                     client.client_name,
                     client.client_mail,
                     client.client_real_phone,
-                    client.client_proxy_number,
+                    client.client_proxy_number or "",
                     client.client_iso_residency,
                     client.client_country_code,
                 ]
@@ -426,13 +477,17 @@ class SheetsStore(ClientStore):
         clients: list[DemoClient] = []
         for r in self._all_records():
             try:
+                proxy_val = None
+                proxy_raw = r.get("client_proxy_number", "")
+                if proxy_raw is not None and str(proxy_raw).strip():
+                    proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
                 clients.append(
                     DemoClient(
                         client_id=parse_client_id(r.get("client_id", 0)),
                         client_name=str(r.get("client_name", "")),
                         client_mail=str(r.get("client_mail", "")),
-                        client_real_phone=str(r.get("client_real_phone", "")),
-                        client_proxy_number=str(r.get("client_proxy_number", "")),
+                        client_real_phone=normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone"),
+                        client_proxy_number=proxy_val,
                         client_iso_residency=str(r.get("client_iso_residency", "")),
                         client_country_code=str(r.get("client_country_code", "")),
                     )
@@ -491,12 +546,12 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
-def make_proxy_mock(client_id: int, country_code: str) -> str:
+def make_proxy_mock(client_id: int, country_code: str) -> int:
     # proxy stable et "réaliste" (mais fake) basé sur hash(client_id)
     h = hashlib.sha256(str(client_id).encode("utf-8")).hexdigest()
     digits = "".join([c for c in h if c.isdigit()])[:9].ljust(9, "0")
-    # country_code is like "+33" => keep it and pad digits
-    return f"{country_code}{digits}"
+    proxy_digits = f"{country_code}{digits}"
+    return normalize_phone_digits(proxy_digits, label="client_proxy_number")
 
 
 def parse_client_id(value: str | int) -> int:
@@ -554,7 +609,7 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
         raise ValidationError("--client-mail requis.")
 
     real_phone_input = args.client_real_phone or (existing.client_real_phone if existing else "")
-    client_real_phone = validate_e164(real_phone_input, "client_real_phone")
+    client_real_phone = normalize_phone_digits(real_phone_input, label="client_real_phone")
 
     cc = extract_country_code_simple(client_real_phone)
 
@@ -588,14 +643,14 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
                 friendly_name=f"Client-{client_id}",
             )
     else:
-        proxy = ""
+        proxy = None
 
     client = DemoClient(
         client_id=client_id,
         client_name=client_name,
         client_mail=client_mail,
         client_real_phone=client_real_phone,
-        client_proxy_number=normalize_e164_like(proxy) if proxy else "",
+        client_proxy_number=normalize_phone_digits(proxy, label="client_proxy_number") if proxy else None,
         client_iso_residency=iso_residency,
         client_country_code=country_code,
     )
@@ -610,7 +665,7 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
 
 
 def do_lookup(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
-    proxy = validate_e164(args.proxy, "proxy")
+    proxy = normalize_phone_digits(args.proxy, label="proxy")
     client = store.get_by_proxy(proxy)
     if not client:
         raise NotFoundError("Aucun client trouvé pour ce proxy.", details={"proxy": proxy})
@@ -620,8 +675,8 @@ def do_lookup(args: argparse.Namespace, store: ClientStore, logger: logging.Logg
 
 
 def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
-    caller = validate_e164(args.from_number, "from")
-    proxy = validate_e164(args.to_number, "to (proxy)")
+    caller = normalize_phone_digits(args.from_number, label="from")
+    proxy = normalize_phone_digits(args.to_number, label="to (proxy)")
 
     client = store.get_by_proxy(proxy)
     if not client:
@@ -629,8 +684,6 @@ def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: loggi
 
     caller_cc = extract_country_code_simple(caller)
     expected_cc = client.client_country_code or extract_country_code_simple(client.client_real_phone)
-    if expected_cc and not expected_cc.startswith("+"):
-        expected_cc = "+" + expected_cc
 
     if expected_cc and caller_cc != expected_cc:
         logger.warning("Routage refusé (country mismatch).")
@@ -640,8 +693,8 @@ def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: loggi
     logger.info("Routage autorisé (Dial vers phone_real).")
     print(
         twiml_dial(
-            proxy_number=normalize_e164_like(client.client_proxy_number),
-            real_number=normalize_e164_like(client.client_real_phone),
+            proxy_number=phone_digits_to_e164(client.client_proxy_number, label="proxy"),
+            real_number=phone_digits_to_e164(client.client_real_phone, label="client_real_phone"),
         )
     )
     return 0
@@ -817,7 +870,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                         print(f"ID attribué automatiquement : {client_id}")
                         name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
                         client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"
-                        client_real_phone = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
+                        client_real_phone = input("Numéro réel (ex: 33601020304) : ").strip() or "33601020304"
                         assign_proxy_answer = (input("Attribuer un proxy maintenant ? [O/n] : ").strip().lower() or "o")
                         assign_proxy = not assign_proxy_answer.startswith("n")
                         args_client = argparse.Namespace(
@@ -851,9 +904,9 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                                 continue
                             found = store.get_by_id(client_id_val)
                         elif lookup_choice == "2":
-                            proxy = input("Numéro proxy (ex: +33900000000) : ").strip()
+                            proxy = input("Numéro proxy (ex: 33900000000) : ").strip()
                             try:
-                                proxy_norm = validate_e164(proxy, "proxy")
+                                proxy_norm = normalize_phone_digits(proxy, label="proxy")
                             except CLIError as exc:
                                 logger.error("Proxy invalide: %s", exc)
                                 continue
@@ -910,8 +963,8 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
 
             if choice == "2":
                 logger.info("Menu 2: simulation appel autorisé.")
-                from_number = input("Numéro appelant (même pays, ex: +33111111111) : ").strip() or "+33111111111"
-                to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
+                from_number = input("Numéro appelant (même pays, ex: 33111111111) : ").strip() or "33111111111"
+                to_number = input("Numéro proxy appelé (ex: 33900000000) : ").strip() or "33900000000"
                 args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
                 try:
                     do_simulate_call(args_call, store, logger)
@@ -921,8 +974,8 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
 
             if choice == "3":
                 logger.info("Menu 3: simulation appel bloqué.")
-                from_number = input("Numéro appelant (autre pays, ex: +442222222222) : ").strip() or "+442222222222"
-                to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
+                from_number = input("Numéro appelant (autre pays, ex: 442222222222) : ").strip() or "442222222222"
+                to_number = input("Numéro proxy appelé (ex: 33900000000) : ").strip() or "33900000000"
                 args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
                 try:
                     do_simulate_call(args_call, store, logger)

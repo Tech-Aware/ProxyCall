@@ -63,11 +63,11 @@ Le CLI va :
    - `1` pour la démo **simulée (mock)** — recommandé, aucun prérequis
    - `2` pour la démo **live** — nécessite Twilio + Google Sheets
 2. Afficher un menu simple `1, 2, 3` pour :
-   - `1` Gérer un client : choix entre **créer** (ID auto-incrémenté entier, proxy optionnel), **rechercher/afficher** un client existant (par ID entier ou proxy) ou **attribuer un proxy** ultérieurement à un client déjà créé. Lors de la création, le CLI n’alimente jamais l’ISO ni l’indicatif : le Sheet les calcule.
+   - `1` Gérer un client : choix entre **créer** (ID auto-incrémenté entier, proxy optionnel), **rechercher/afficher** un client existant (par ID entier ou proxy) ou **attribuer un proxy** ultérieurement à un client déjà créé. Lors de la création, le CLI n’alimente jamais l’ISO ni l’indicatif : le Sheet les calcule, et les numéros (réel/proxy) sont stockés uniquement sous forme d’entiers sans signe « + ».
    - `2` Simuler un appel autorisé (même indicatif pays)
    - `3` Simuler un appel bloqué (indicatif différent)
 
-Les entrées par défaut sont préremplies (ex : `+33900000000` pour le proxy mock). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante) sans saisie obligatoire.
+Les entrées par défaut sont préremplies (ex : `33900000000` pour le proxy mock). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante) sans saisie obligatoire.
 
 ℹ️ Si vous choisissez le mode **LIVE** sans avoir renseigné les variables d’environnement requises, le CLI vous proposera automatiquement de basculer en mode **MOCK** afin de continuer la démonstration sans erreur.
 
