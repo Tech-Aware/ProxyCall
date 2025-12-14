@@ -1034,7 +1034,21 @@ def do_pool_assign(
     if not auto_confirm:
         print(
             "\nAttribution d'un proxy au client suivant :",
-            f"\n  ID : {client.client_id}\n  Nom : {client.client_name or 'N/A'}\n  Pays : {country}\n",
+            (
+                "\n  ID : {id}"
+                "\n  Nom : {name}"
+                "\n  Email : {mail}"
+                "\n  Téléphone réel : {phone}"
+                "\n  ISO résidence : {iso}"
+                "\n  Pays cible : {country}\n"
+            ).format(
+                id=client.client_id,
+                name=client.client_name or "N/A",
+                mail=client.client_mail,
+                phone=phone_digits_to_e164(client.client_real_phone, label="client_real_phone"),
+                iso=client.client_iso_residency or "N/A",
+                country=country,
+            ),
         )
         confirm = input("Confirmer l'attribution ? (o/N) : ").strip().lower()
         if confirm not in {"o", "oui", "y", "yes"}:
