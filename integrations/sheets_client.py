@@ -23,3 +23,9 @@ class SheetsClient:
         """
         sh = gc.open(settings.GOOGLE_SHEET_NAME)
         return sh.worksheet("Clients")
+
+    @staticmethod
+    def get_pools_sheet():
+        """Retourne la feuille 'TwilioPools' pour le pool de numéros."""
+        sh = gc.open(settings.GOOGLE_SHEET_NAME)
+        return sh.worksheet("TwilioPools")

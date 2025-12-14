@@ -16,4 +16,7 @@ class Settings:
     # Nouveau : pays dans lequel on va chercher les numéros Twilio
     TWILIO_PHONE_COUNTRY: str = os.getenv("TWILIO_PHONE_COUNTRY", "US")
 
+    # Pool par pays : nombre de numéros achetés d'un coup lorsque le pool est vide
+    TWILIO_POOL_SIZE: int = int(os.getenv("TWILIO_POOL_SIZE", "3"))
+
 settings = Settings()
