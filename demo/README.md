@@ -63,7 +63,7 @@ Le CLI va :
    - `1` pour la démo **simulée (mock)** — recommandé, aucun prérequis
    - `2` pour la démo **live** — nécessite Twilio + Google Sheets
 2. Afficher un menu simple `1, 2, 3` pour :
-   - `1` Créer/afficher le client démo et récupérer son numéro proxy
+   - `1` Gérer un client : choix entre **créer** (saisie guidée champ par champ) ou **rechercher/afficher** un client existant
    - `2` Simuler un appel autorisé (même indicatif pays)
    - `3` Simuler un appel bloqué (indicatif différent)
 

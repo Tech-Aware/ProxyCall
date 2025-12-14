@@ -653,7 +653,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
 
         while True:
             print("Menu principal :")
-            print("  1) Créer/afficher le client démo et récupérer le proxy")
+            print("  1) Gérer un client (créer ou rechercher)")
             print("  2) Simuler un appel autorisé (même indicatif pays)")
             print("  3) Simuler un appel bloqué (indicatif différent)")
             print("  0) Quitter")
@@ -666,26 +666,69 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, logger: loggi
                 return 0
 
             if choice == "1":
-                logger.info("Menu 1: création/affichage client demandé.")
-                client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
-                name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
-                client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"
-                client_real_phone = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
-                iso_residency = input("ISO pays de résidence (ex: FR) : ").strip() or "FR"
-                client_country_code = extract_country_code_simple(client_real_phone)
-                args_client = argparse.Namespace(
-                    client_id=client_id,
-                    name=name,
-                    client_mail=client_mail,
-                    client_real_phone=client_real_phone,
-                    client_iso_residency=iso_residency,
-                    client_country_code=client_country_code,
-                    mode=args.mode,
-                )
-                try:
-                    do_create_client(args_client, store, logger)
-                except CLIError as exc:
-                    logger.error("Erreur création client: %s", exc)
+                logger.info("Menu 1: gestion client (créer/rechercher).")
+                while True:
+                    print("\nGestion client :")
+                    print("  1) Créer un client (saisie guidée)")
+                    print("  2) Rechercher/afficher un client existant")
+                    print("  0) Retour au menu principal")
+                    sub_choice = input("Votre sélection : ").strip() or "0"
+
+                    if sub_choice == "0":
+                        break
+
+                    if sub_choice == "1":
+                        client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
+                        name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
+                        client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"
+                        client_real_phone = input("Numéro réel (ex: +33123456789) : ").strip() or "+33123456789"
+                        iso_residency = input("ISO pays de résidence (ex: FR) : ").strip() or "FR"
+                        client_country_code = extract_country_code_simple(client_real_phone)
+                        args_client = argparse.Namespace(
+                            client_id=client_id,
+                            name=name,
+                            client_mail=client_mail,
+                            client_real_phone=client_real_phone,
+                            client_iso_residency=iso_residency,
+                            client_country_code=client_country_code,
+                            mode=args.mode,
+                        )
+                        try:
+                            do_create_client(args_client, store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur création client: %s", exc)
+                        continue
+
+                    if sub_choice == "2":
+                        print("Rechercher par :")
+                        print("  1) ID client")
+                        print("  2) Numéro proxy")
+                        lookup_choice = input("Votre sélection (1 par défaut) : ").strip() or "1"
+                        if lookup_choice == "1":
+                            client_id = input("ID client (ex: demo-client) : ").strip() or "demo-client"
+                            found = store.get_by_id(client_id)
+                        elif lookup_choice == "2":
+                            proxy = input("Numéro proxy (ex: +33900000000) : ").strip()
+                            try:
+                                proxy_norm = validate_e164(proxy, "proxy")
+                            except CLIError as exc:
+                                logger.error("Proxy invalide: %s", exc)
+                                continue
+                            found = store.get_by_proxy(proxy_norm)
+                        else:
+                            print("Merci de choisir 1 ou 2.\n")
+                            continue
+
+                        if not found:
+                            logger.warning("Client introuvable.")
+                            print("Aucun client correspondant.")
+                            continue
+
+                        logger.info("Client trouvé (affiché ci-dessous).")
+                        print(json.dumps(dataclasses.asdict(found), indent=2, ensure_ascii=False))
+                        continue
+
+                    print("Merci de choisir 0, 1 ou 2.\n")
                 continue
 
             if choice == "2":
