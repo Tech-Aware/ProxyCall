@@ -64,26 +64,27 @@ def run_mock_client_journey(fixtures_path: Path | str = Path("demo/fixtures/clie
         LOGGER.info("Démarrage du scénario mock (fixtures=%s).", fixtures_path)
 
         args_create = argparse.Namespace(
-            client_id="demo-client",
+            client_id=1,
             name="Client Démo",
-            phone_real="+33123456789",
+            client_mail="demo@example.com",
+            client_real_phone=33123456789,
             mode="mock",
         )
         with _capture_stdout() as buf_create:
             do_create_client(args_create, store, logger)
         outputs["create_client"] = buf_create.getvalue().strip()
 
-        args_lookup = argparse.Namespace(proxy="+33900000000")
+        args_lookup = argparse.Namespace(proxy=33900000000)
         with _capture_stdout() as buf_lookup:
             do_lookup(args_lookup, store, logger)
         outputs["lookup"] = buf_lookup.getvalue().strip()
 
-        args_call_ok = argparse.Namespace(from_number="+33111111111", to_number="+33900000000")
+        args_call_ok = argparse.Namespace(from_number=33111111111, to_number=33900000000)
         with _capture_stdout() as buf_call_ok:
             do_simulate_call(args_call_ok, store, logger)
         outputs["simulate_call_same_country"] = buf_call_ok.getvalue().strip()
 
-        args_call_block = argparse.Namespace(from_number="+442222222222", to_number="+33900000000")
+        args_call_block = argparse.Namespace(from_number=442222222222, to_number=33900000000)
         with _capture_stdout() as buf_call_block:
             do_simulate_call(args_call_block, store, logger)
         outputs["simulate_call_other_country"] = buf_call_block.getvalue().strip()
