@@ -22,12 +22,12 @@ def test_mock_pool_assign_updates_client(tmp_path):
             client_mail="demo@example.com",
             client_real_phone=33601020304,
             client_proxy_number=None,
-            client_iso_residency="",
-            client_country_code="",
+            client_iso_residency="FR",
+            client_country_code="33",
         )
     )
 
-    args = argparse.Namespace(client_id="1", country="FR", friendly_name="Friendly-demo")
+    args = argparse.Namespace(client_id="1", yes=True)
     do_pool_assign(args, store, pool, logger)
 
     updated = store.get_by_id(1)

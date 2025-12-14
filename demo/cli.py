@@ -1027,8 +1027,35 @@ def do_pool_assign(
     if client.client_proxy_number:
         raise ValidationError("Le client possède déjà un proxy.")
 
-    country = (args.country or "FR").upper()
-    friendly = args.friendly_name or f"Client-{client_id}"
+    country = (client.client_iso_residency or client.client_country_code or os.getenv("TWILIO_PHONE_COUNTRY", "FR")).upper()
+    friendly = f"Client-{client_id}" if not client.client_name else client.client_name
+
+    auto_confirm = bool(getattr(args, "yes", False))
+    if not auto_confirm:
+        print(
+            "\nAttribution d'un proxy au client suivant :",
+            (
+                "\n  ID : {id}"
+                "\n  Nom : {name}"
+                "\n  Email : {mail}"
+                "\n  Téléphone réel : {phone}"
+                "\n  ISO résidence : {iso}"
+                "\n  Pays cible : {country}\n"
+            ).format(
+                id=client.client_id,
+                name=client.client_name or "N/A",
+                mail=client.client_mail,
+                phone=phone_digits_to_e164(client.client_real_phone, label="client_real_phone"),
+                iso=client.client_iso_residency or "N/A",
+                country=country,
+            ),
+        )
+        confirm = input("Confirmer l'attribution ? (o/N) : ").strip().lower()
+        if confirm not in {"o", "oui", "y", "yes"}:
+            logger.info("Attribution annulée par l'utilisateur", extra={"client_id": client_id})
+            print("Attribution annulée.\n")
+            return 0
+
     proxy = pool_store.assign_number(country, friendly, client.client_name)
 
     client.client_proxy_number = normalize_phone_digits(proxy, label="proxy")
@@ -1104,8 +1131,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Attribue un numéro du pool à un client existant (et met à jour sa fiche).",
     )
     c7.add_argument("--client-id", required=True)
-    c7.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
-    c7.add_argument("--friendly-name", required=False, help="Libellé Twilio/friendly name.")
+    c7.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation interactive.")
 
     return p
 
@@ -1367,9 +1393,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         if not client_raw:
                             print("Merci de renseigner un ID client.\n")
                             continue
-                        country = input("Pays ISO (ex: FR) : ").strip() or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
-                        friendly = input("Friendly name (optionnel) : ").strip()
-                        args_pool = argparse.Namespace(client_id=client_raw, country=country, friendly_name=friendly)
+                        args_pool = argparse.Namespace(client_id=client_raw, yes=False)
                         try:
                             do_pool_assign(args_pool, store, pool_store, logger)
                         except CLIError as exc:
