@@ -1,10 +1,15 @@
+import logging
 from models.client import Client
 from repositories.clients_repository import ClientsRepository
 from integrations.twilio_client import TwilioClient
 
 
+logger = logging.getLogger(__name__)
+
+
 class ClientAlreadyExistsError(Exception):
     """Levée quand on essaie de créer un client qui existe déjà."""
+
     pass
 
 
@@ -34,10 +39,20 @@ class ClientsService:
         Récupère un client par son ID.
         Utilisé par l'API GET /clients/{client_id}.
         """
-        return ClientsRepository.get_by_id(client_id)
+        try:
+            return ClientsRepository.get_by_id(client_id)
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Erreur lors de la récupération du client", exc_info=exc)
+            return None
 
     @staticmethod
-    def create_client(client_id: str, client_name: str, phone_real: str) -> Client:
+    def create_client(
+        client_id: str,
+        client_name: str,
+        client_mail: str,
+        client_real_phone: str,
+        client_iso_residency: str | None = None,
+    ) -> Client:
         """
         Crée un nouveau client de manière stricte.
         - Si le client existe déjà -> lève ClientAlreadyExistsError.
@@ -48,17 +63,23 @@ class ClientsService:
         if existing:
             raise ClientAlreadyExistsError(f"Client {client_id} existe déjà.")
 
-        cc = extract_country_code(phone_real)
-        proxy = TwilioClient.buy_number_for_client(
-            friendly_name=f"Client-{client_id}"
-        )
+        cc = extract_country_code(client_real_phone)
+        try:
+            proxy = TwilioClient.buy_number_for_client(
+                friendly_name=f"Client-{client_id}"
+            )
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Erreur lors de l'achat du numéro proxy", exc_info=exc)
+            raise
 
         client = Client(
             client_id=client_id,
             client_name=client_name,
-            phone_real=phone_real,
-            phone_proxy=proxy,
-            country_code=cc,
+            client_mail=client_mail,
+            client_real_phone=client_real_phone,
+            client_proxy_number=proxy,
+            client_iso_residency=client_iso_residency,
+            client_country_code=cc,
         )
 
         ClientsRepository.save(client)
@@ -69,7 +90,13 @@ class ClientsService:
     # ==============
 
     @staticmethod
-    def get_or_create_client(client_id: str, client_name: str, phone_real: str) -> Client:
+    def get_or_create_client(
+        client_id: str,
+        client_name: str,
+        client_mail: str,
+        client_real_phone: str,
+        client_iso_residency: str | None = None,
+    ) -> Client:
         """
         Utilisée côté OrdersService :
         - Si le client existe -> le renvoie tel quel (on ne recrée pas de proxy).
@@ -83,5 +110,7 @@ class ClientsService:
         return ClientsService.create_client(
             client_id=client_id,
             client_name=client_name,
-            phone_real=phone_real,
+            client_mail=client_mail,
+            client_real_phone=client_real_phone,
+            client_iso_residency=client_iso_residency,
         )

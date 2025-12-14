@@ -1,8 +1,12 @@
 # services/call_routing_service.py
 
+import logging
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from repositories.clients_repository import ClientsRepository
 from services.clients_service import extract_country_code
+
+
+logger = logging.getLogger(__name__)
 
 
 class CallRoutingService:
@@ -13,44 +17,51 @@ class CallRoutingService:
         caller_number : numéro appelant (livreur)
         Retourne le TwiML à envoyer à Twilio.
         """
-        print(
-            f"[DEBUG] CallRoutingService.handle_incoming_call("
-            f"proxy_number='{proxy_number}', caller_number='{caller_number}')"
+        logger.info(
+            "Réception d'un appel sur le proxy",
+            extra={"proxy_number": proxy_number, "caller_number": caller_number},
         )
 
         resp = VoiceResponse()
 
-        # 1) Récupérer le client via le proxy
-        client = ClientsRepository.get_by_proxy_number(proxy_number)
-        print(f"[DEBUG] client from proxy: {client}")
+        try:
+            client = ClientsRepository.get_by_proxy_number(proxy_number)
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Erreur lors de la récupération du client par proxy", exc_info=exc)
+            resp.say("Service temporairement indisponible.", language="fr-FR")
+            return str(resp)
 
         if not client:
             resp.say("Ce numéro n'est pas reconnu.", language="fr-FR")
             return str(resp)
 
-        # 2) Filtre indicatif pays
-        client_cc = str(client.country_code)
-        if not client_cc.startswith("+"):
+        client_cc = str(client.client_country_code or "")
+        if client_cc and not client_cc.startswith("+"):
             client_cc = "+" + client_cc
 
         caller_cc = extract_country_code(caller_number)
-        print(f"[DEBUG] country_codes: client_cc='{client_cc}', caller_cc='{caller_cc}'")
+        logger.info(
+            "Comparaison des indicatifs pays",
+            extra={"client_country_code": client_cc, "caller_country_code": caller_cc},
+        )
 
-        if client_cc != caller_cc:
+        if client_cc and client_cc != caller_cc:
             resp.say("Ce numéro n'est pas accessible depuis votre pays.", language="fr-FR")
             return str(resp)
 
-        # 3) Routage vers le vrai numéro
-        proxy_e164 = proxy_number
-        if not proxy_e164.startswith("+"):
-            proxy_e164 = "+" + proxy_e164
-
-        real_e164 = str(client.phone_real)
-        if not real_e164.startswith("+"):
-            real_e164 = "+" + real_e164
+        proxy_e164 = proxy_number if proxy_number.startswith("+") else f"+{proxy_number}"
+        real_e164 = (
+            client.client_real_phone
+            if str(client.client_real_phone).startswith("+")
+            else f"+{client.client_real_phone}"
+        )
 
         dial = Dial(callerId=proxy_e164)
         dial.number(real_e164)
         resp.append(dial)
 
+        logger.info(
+            "Routage de l'appel vers le numéro réel",
+            extra={"proxy": proxy_e164, "destination": real_e164},
+        )
         return str(resp)
