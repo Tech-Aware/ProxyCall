@@ -4,17 +4,17 @@
     "client_name": "Alice Demo",
     "client_mail": "alice.demo@example.com",
     "client_real_phone": 33123456789,
-    "client_proxy_number": 33900000000,
-    "client_iso_residency": "",
-    "client_country_code": ""
+    "client_proxy_number": "",
+    "client_iso_residency": "FR",
+    "client_country_code": 33
   },
   {
     "client_id": 2,
     "client_name": "Bob Demo",
     "client_mail": "bob.demo@example.com",
     "client_real_phone": 442012345678,
-    "client_proxy_number": 442000000000,
-    "client_iso_residency": "",
-    "client_country_code": ""
+    "client_proxy_number": "",
+    "client_iso_residency": "UK",
+    "client_country_code": 44
   }
 ]
