@@ -26,6 +26,37 @@ def extract_country_code(phone: str) -> str:
     return p[:3]
 
 
+def _to_twilio_country_code(client_country_code: str) -> str:
+    """Convertit un indicatif client en code pays ISO compatible Twilio.
+
+    - Si un code ISO (2 lettres) est fourni, on le renvoie en majuscules.
+    - Si un indicatif numérique est fourni (ex: +33, 33), on mappe vers l'ISO.
+    - Si l'indicatif est inconnu, on lève une ValueError pour éviter un mismatch.
+    """
+
+    if not client_country_code:
+        raise ValueError("Aucun indicatif pays client fourni.")
+
+    cc = client_country_code.strip()
+    if len(cc) == 2 and cc.isalpha():
+        return cc.upper()
+
+    dial_code = cc.lstrip("+")
+    mapping = {
+        "1": "US",  # USA/Canada - on privilégie US par défaut
+        "33": "FR",
+        "34": "ES",
+        "39": "IT",
+        "44": "GB",
+        "49": "DE",
+    }
+
+    if dial_code in mapping:
+        return mapping[dial_code]
+
+    raise ValueError(f"Indicatif pays client inconnu ou non supporté: {client_country_code}")
+
+
 
 class ClientsService:
 
@@ -65,8 +96,10 @@ class ClientsService:
 
         cc = extract_country_code(client_real_phone)
         try:
+            twilio_country = _to_twilio_country_code(cc)
             proxy = TwilioClient.buy_number_for_client(
-                friendly_name=f"Client-{client_id}"
+                friendly_name=f"Client-{client_id}",
+                country=twilio_country,
             )
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception("Erreur lors de l'achat du numéro proxy", exc_info=exc)
