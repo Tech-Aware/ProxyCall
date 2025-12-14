@@ -1,0 +1,16 @@
+[
+  {
+    "client_id": "demo-1",
+    "client_name": "Alice Demo",
+    "phone_real": "+33123456789",
+    "phone_proxy": "+33900000000",
+    "country_code": "+33"
+  },
+  {
+    "client_id": "demo-2",
+    "client_name": "Bob Demo",
+    "phone_real": "+442012345678",
+    "phone_proxy": "+442000000000",
+    "country_code": "+44"
+  }
+]

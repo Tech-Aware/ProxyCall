@@ -45,3 +45,40 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 
 - Le contenu de ce dossier est orienté **présentation** : il vise à montrer le fonctionnement et la valeur, pas à détailler toute l’implémentation.
 - Les secrets (Twilio, Google) doivent rester hors du dépôt (fichier `.env`, clé de service account, etc.).
+
+## Démarrer une démo mock rapidement
+
+Les commandes suivantes permettent de présenter le parcours complet sans dépendances externes en s’appuyant sur les fixtures du dossier `demo/fixtures` :
+
+```bash
+# 1) Création (idempotente) d’un client démo + proxy
+python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
+  create-client --client-id demo-client --name "Client Démo" --phone-real +33123456789
+
+# 2) Lookup du client depuis le proxy
+python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
+  lookup --proxy +33900000000
+
+# 3) Simulation d’appel autorisé (même indicatif pays)
+python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
+  simulate-call --from +33111111111 --to +33900000000
+
+# 4) Simulation d’appel refusé (indicatif différent)
+python -m demo.cli --mock --fixtures demo/fixtures/clients.json \
+  simulate-call --from +442222222222 --to +33900000000
+```
+
+Si vous préférez déclencher ces étapes depuis Python (pour afficher le rendu dans un notebook ou un script interne), utilisez les helpers de `demo/scenarios.py` :
+
+```python
+from demo.scenarios import run_mock_client_journey, cli_command_examples
+
+outputs = run_mock_client_journey()
+for step, stdout in outputs.items():
+    print(f"\n=== {step} ===")
+    print(stdout)
+
+print("\nCommandes prêtes à l’emploi :")
+for cmd in cli_command_examples():
+    print(cmd)
+```
