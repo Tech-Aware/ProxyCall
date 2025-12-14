@@ -1,7 +1,9 @@
+import logging
 from fastapi import APIRouter, HTTPException
 from app.services.clients_service import ClientsService, ClientAlreadyExistsError
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.get("/{client_id}")
 def get_client(client_id: str):
@@ -12,20 +14,37 @@ def get_client(client_id: str):
     return {
         "client_id": client.client_id,
         "client_name": client.client_name,
-        "phone_real": client.phone_real,
-        "phone_proxy": client.phone_proxy,
-        "country_code": client.country_code,
+        "client_mail": client.client_mail,
+        "client_real_phone": client.client_real_phone,
+        "client_proxy_number": client.client_proxy_number,
+        "client_iso_residency": client.client_iso_residency,
+        "client_country_code": client.client_country_code,
     }
 
 
 @router.post("")
-def create_client(client_id: str, client_name: str, phone_real: str):
+def create_client(
+    client_id: str,
+    client_name: str,
+    client_mail: str,
+    client_real_phone: str,
+    client_iso_residency: str | None = None,
+):
     try:
-        client = ClientsService.create_client(client_id, client_name, phone_real)
+        client = ClientsService.create_client(
+            client_id,
+            client_name,
+            client_mail,
+            client_real_phone,
+            client_iso_residency,
+        )
     except ClientAlreadyExistsError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        logger.exception("Erreur lors de la création du client", exc_info=exc)
+        raise HTTPException(status_code=500, detail="Erreur interne")
 
     return {
         "client_id": client.client_id,
-        "phone_proxy": client.phone_proxy,
+        "client_proxy_number": client.client_proxy_number,
     }
