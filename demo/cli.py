@@ -250,13 +250,26 @@ class SheetsStore(ClientStore):
 
     def _ensure_headers(self) -> None:
         try:
-            first = self.ws.row_values(1)
-            if [h.strip() for h in first] != self.HEADERS:
-                # If empty sheet, write headers. If not empty but different, don't overwrite.
-                if len(first) == 0:
-                    self.ws.insert_row(self.HEADERS, 1)
-                else:
-                    self.logger.warning("Headers Sheets inattendus (on n’écrase pas).")
+            first_row = [str(h).strip() for h in self.ws.row_values(1)]
+            non_empty = [h for h in first_row if h]
+
+            if len(non_empty) == 0:
+                self.ws.insert_row(self.HEADERS, 1)
+                return
+
+            missing = [h for h in self.HEADERS if h not in non_empty]
+            if missing:
+                raise ConfigError(
+                    "En-têtes Google Sheets incomplètes pour la démo LIVE.",
+                    details={"missing": missing, "found": non_empty},
+                )
+
+            extra = [h for h in non_empty if h not in self.HEADERS]
+            if extra or non_empty != self.HEADERS:
+                suffix = f" Colonnes supplémentaires détectées: {', '.join(extra)}." if extra else ""
+                self.logger.info(
+                    "En-têtes Sheets conservées (ordre différent ou colonnes supplémentaires détectées)." + suffix
+                )
         except Exception as e:
             raise ExternalServiceError("Erreur lecture/initialisation headers Sheets.") from e
 

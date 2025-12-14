@@ -47,6 +47,7 @@ Ce dossier **DEMO** sert à présenter, de façon simple et reproductible, le co
 - Les secrets (Twilio, Google) doivent rester hors du dépôt (fichier `.env`, clé de service account, etc.).
 - Le CLI charge automatiquement un fichier `.env` à la racine du repo (et tout `.env` détecté via `find_dotenv`), ce qui permet de tester le mode LIVE sans exporter manuellement les variables.
 - Le chemin vers le fichier **service account** peut être donné relativement à la racine du dépôt (pratique depuis PyCharm ou un autre répertoire).
+- L’onglet `Clients` du Google Sheet doit contenir au moins les colonnes suivantes : `client_id`, `client_name`, `phone_real`, `phone_proxy`, `country_code`. Si d’autres colonnes existent déjà, elles sont conservées : le CLI ne réécrit pas les en-têtes.
 
 ## Lancer la démo pour un utilisateur non averti
 
