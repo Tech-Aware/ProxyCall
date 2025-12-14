@@ -26,6 +26,68 @@ def extract_country_code(phone: str) -> str:
     return p[:3]
 
 
+def _to_twilio_country_code(client_country_code: str) -> str:
+    """Convertit un indicatif client en code pays ISO compatible Twilio.
+
+    - Si un code ISO (2 lettres) est fourni, on le renvoie en majuscules.
+    - Si un indicatif numérique est fourni (ex: +33, 33), on mappe vers l'ISO.
+    - Si l'indicatif est inconnu, on lève une ValueError pour éviter un mismatch.
+    """
+
+    if not client_country_code:
+        raise ValueError("Aucun indicatif pays client fourni.")
+
+    cc = client_country_code.strip()
+    if len(cc) == 2 and cc.isalpha():
+        return cc.upper()
+
+    dial_code = cc.lstrip("+")
+    mapping = {
+        "1": "US",  # USA/Canada - on privilégie US par défaut
+        "33": "FR",
+        "34": "ES",
+        "39": "IT",
+        "44": "GB",
+        "49": "DE",
+    }
+
+    if dial_code in mapping:
+        return mapping[dial_code]
+
+    raise ValueError(f"Indicatif pays client inconnu ou non supporté: {client_country_code}")
+
+
+def _resolve_twilio_country_code(
+    client_iso_residency: str | None, client_real_phone: str
+) -> str:
+    """Détermine le code pays ISO-2 pour Twilio.
+
+    Priorité : client_iso_residency (si valide sur 2 lettres), puis mapping de
+    l'indicatif téléphonique. Lève une ValueError avec un message explicite si
+    aucune source n'est exploitable.
+    """
+
+    iso_errors: list[str] = []
+    if client_iso_residency:
+        iso_code = client_iso_residency.strip()
+        if len(iso_code) == 2 and iso_code.isalpha():
+            return iso_code.upper()
+        iso_errors.append(
+            f"client_iso_residency invalide (attendu code ISO-2): {client_iso_residency}"
+        )
+
+    cc = extract_country_code(client_real_phone)
+    try:
+        return _to_twilio_country_code(cc)
+    except Exception as exc:
+        phone_error = str(exc)
+
+    error_parts = iso_errors + [phone_error]
+    raise ValueError(
+        "Impossible de déterminer le pays Twilio : " + "; ".join(error_parts)
+    )
+
+
 
 class ClientsService:
 
@@ -63,10 +125,14 @@ class ClientsService:
         if existing:
             raise ClientAlreadyExistsError(f"Client {client_id} existe déjà.")
 
-        cc = extract_country_code(client_real_phone)
         try:
+            twilio_country = _resolve_twilio_country_code(
+                client_iso_residency, client_real_phone
+            )
+            cc = extract_country_code(client_real_phone)
             proxy = TwilioClient.buy_number_for_client(
-                friendly_name=f"Client-{client_id}"
+                friendly_name=f"Client-{client_id}",
+                country=twilio_country,
             )
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception("Erreur lors de l'achat du numéro proxy", exc_info=exc)

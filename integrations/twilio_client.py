@@ -10,15 +10,13 @@ twilio = TwilioRest(
 
 class TwilioClient:
     @staticmethod
-    def buy_number_for_client(friendly_name: str) -> str:
+    def buy_number_for_client(*, friendly_name: str, country: str) -> str:
         """
-        1. Cherche un numéro local disponible dans le pays TWILIO_PHONE_COUNTRY.
+        1. Cherche un numéro local disponible dans le pays demandé.
         2. Achète ce numéro.
         3. Configure le webhook voice.
         4. Retourne le numéro (phone_proxy).
         """
-
-        country = settings.TWILIO_PHONE_COUNTRY  # ex: "US", "FR", "GB", ...
 
         # 1) Récupérer un numéro disponible
         available_numbers = twilio.available_phone_numbers(country).local.list(limit=1)
