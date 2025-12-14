@@ -79,12 +79,13 @@ config.local.py
 local_settings.py
 
 # =========================
-# Demo / fixtures (optionnel)
+# Demo / fixtures (versionnés pour la démo)
 # =========================
-demo/fixtures/*.json
-demo/fixtures/*.csv
-
-# If you DO want to version demo fixtures, comment the lines above.
+# Les fixtures de démo sont versionnées pour simplifier la prise en main.
+# Si vous souhaitez ignorer les fichiers générés localement, dé-commentez
+# les lignes ci-dessous.
+# demo/fixtures/*.json
+# demo/fixtures/*.csv
 
 # =========================
 # Local dev tools
