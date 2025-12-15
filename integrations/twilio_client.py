@@ -20,7 +20,9 @@ class TwilioClient:
 
     @staticmethod
     def _purchase_number(
-        country: str, friendly_name: str, number_type: str = "mobile"
+        country: str,
+        friendly_name: str,
+        number_type: str = settings.TWILIO_NUMBER_TYPE,
     ) -> str:
         """
         Achète un numéro (mobile par défaut) et retourne son identifiant Twilio.
@@ -31,9 +33,17 @@ class TwilioClient:
         """
 
         if number_type == "mobile":
-            available_numbers = (
-                twilio.available_phone_numbers(country).mobile.list(limit=1)
-            )
+            try:
+                available_numbers = (
+                    twilio.available_phone_numbers(country).mobile.list(limit=1)
+                )
+            except Exception:
+                logger.info(
+                    "Les numéros mobiles ne sont pas disponibles pour %s, tentative avec des numéros locaux.",
+                    country,
+                )
+                available_numbers = []
+
             if not available_numbers:
                 logger.info(
                     "Aucun numéro mobile disponible pour le pays %s, basculement vers les numéros locaux.",
@@ -54,15 +64,24 @@ class TwilioClient:
                 )
 
         phone_number = available_numbers[0].phone_number
-        incoming = twilio.incoming_phone_numbers.create(
-            phone_number=phone_number,
-            voice_url=settings.VOICE_WEBHOOK_URL,
-            friendly_name=friendly_name,
-        )
+        create_kwargs = {
+            "phone_number": phone_number,
+            "voice_url": settings.VOICE_WEBHOOK_URL,
+            "friendly_name": friendly_name,
+        }
+        if settings.TWILIO_ADDRESS_SID:
+            create_kwargs["address_sid"] = settings.TWILIO_ADDRESS_SID
+
+        incoming = twilio.incoming_phone_numbers.create(**create_kwargs)
         return incoming.phone_number
 
     @classmethod
-    def _fill_pool(cls, country: str, batch_size: int, number_type: str = "mobile") -> None:
+    def _fill_pool(
+        cls,
+        country: str,
+        batch_size: int,
+        number_type: str = settings.TWILIO_NUMBER_TYPE,
+    ) -> None:
         for idx in range(batch_size):
             friendly = f"Pool-{country}-{idx + 1}"
             purchased = cls._purchase_number(country, friendly, number_type=number_type)
@@ -76,7 +95,10 @@ class TwilioClient:
 
     @classmethod
     def fill_pool(
-        cls, country: str, batch_size: int, number_type: str = "mobile"
+        cls,
+        country: str,
+        batch_size: int,
+        number_type: str = settings.TWILIO_NUMBER_TYPE,
     ) -> None:
         """
         Rend disponible un lot de numéros pour le pays demandé.
@@ -98,7 +120,7 @@ class TwilioClient:
         friendly_name: str,
         country: str | None = None,
         attribution_to_client_name: str | None = None,
-        number_type: str = "mobile",
+        number_type: str = settings.TWILIO_NUMBER_TYPE,
     ) -> str:
         """
         Récupère un numéro dans le pool du pays demandé, ou achète un batch

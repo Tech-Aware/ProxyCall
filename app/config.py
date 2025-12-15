@@ -6,6 +6,7 @@ load_dotenv()
 class Settings:
     TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID")
     TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN")
+    TWILIO_ADDRESS_SID: str | None = os.getenv("TWILIO_ADDRESS_SID")
 
     PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL")  # ex: https://xxxx.ngrok.io
     VOICE_WEBHOOK_URL: str = f"{PUBLIC_BASE_URL}/twilio/voice"
@@ -15,6 +16,9 @@ class Settings:
 
     # Nouveau : pays dans lequel on va chercher les numéros Twilio
     TWILIO_PHONE_COUNTRY: str = os.getenv("TWILIO_PHONE_COUNTRY", "US")
+
+    # Type de numéro Twilio par défaut (mobile ou local)
+    TWILIO_NUMBER_TYPE: str = os.getenv("TWILIO_NUMBER_TYPE", "mobile").lower()
 
     # Pool par pays : nombre de numéros achetés d'un coup lorsque le pool est vide
     TWILIO_POOL_SIZE: int = int(os.getenv("TWILIO_POOL_SIZE", "3"))

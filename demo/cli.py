@@ -15,6 +15,8 @@ from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
 
+DEFAULT_NUMBER_TYPE = os.getenv("TWILIO_NUMBER_TYPE", "mobile").lower()
+
 # --- Optional deps (LIVE + TwiML) ---
 try:
     from twilio.rest import Client as TwilioRestClient
@@ -1204,7 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
     c6.add_argument(
         "--number-type",
         choices=["mobile", "local"],
-        default="mobile",
+        default=DEFAULT_NUMBER_TYPE,
         help="Type de numéro à acheter (mobile par défaut, local sinon).",
     )
 
@@ -1217,7 +1219,7 @@ def build_parser() -> argparse.ArgumentParser:
     c7.add_argument(
         "--number-type",
         choices=["mobile", "local"],
-        default="mobile",
+        default=DEFAULT_NUMBER_TYPE,
         help="Type de numéro à attribuer (mobile par défaut, local sinon).",
     )
 
@@ -1469,7 +1471,11 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         except ValueError:
                             print("Merci d'indiquer un entier.\n")
                             continue
-                        args_pool = argparse.Namespace(country=country, batch_size=batch_size)
+                        args_pool = argparse.Namespace(
+                            country=country,
+                            batch_size=batch_size,
+                            number_type=DEFAULT_NUMBER_TYPE,
+                        )
                         try:
                             do_pool_provision(args_pool, pool_store, logger)
                         except CLIError as exc:
@@ -1481,7 +1487,9 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         if not client_raw:
                             print("Merci de renseigner un ID client.\n")
                             continue
-                        args_pool = argparse.Namespace(client_id=client_raw, yes=False)
+                        args_pool = argparse.Namespace(
+                            client_id=client_raw, yes=False, number_type=DEFAULT_NUMBER_TYPE
+                        )
                         try:
                             do_pool_assign(args_pool, store, pool_store, logger)
                         except CLIError as exc:
