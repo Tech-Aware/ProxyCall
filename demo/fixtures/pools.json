@@ -1,21 +1,23 @@
 [
   {
     "country_iso": "FR",
-    "phone_number": "+33900000001",
+    "phone_number": "+33799000001",
     "status": "available",
     "friendly_name": "Pool-FR-1",
     "date_achat": "2024-01-01T00:00:00",
     "date_attribution": "",
-    "attribution_to_client_name": ""
+    "attribution_to_client_name": "",
+    "number_type": "mobile"
   },
   {
     "country_iso": "US",
-    "phone_number": "+15550000001",
+    "phone_number": "+15552000001",
     "status": "available",
     "friendly_name": "Pool-US-1",
     "date_achat": "2024-01-01T00:00:00",
     "date_attribution": "",
-    "attribution_to_client_name": ""
+    "attribution_to_client_name": "",
+    "number_type": "mobile"
   },
   {
     "country_iso": "UK",
