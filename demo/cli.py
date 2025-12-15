@@ -281,10 +281,14 @@ class PoolStore:
     def list_available(self, country_iso: str) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str) -> list[str]:
+    def provision(
+        self, country_iso: str, batch_size: int, *, friendly_prefix: str, number_type: str = "mobile"
+    ) -> list[str]:
         raise NotImplementedError
 
-    def assign_number(self, country_iso: str, friendly_name: str, client_name: str) -> str:
+    def assign_number(
+        self, country_iso: str, friendly_name: str, client_name: str, *, number_type: str = "mobile"
+    ) -> str:
         raise NotImplementedError
 
 
@@ -429,8 +433,14 @@ class MockJsonStore(ClientStore):
 
 class MockPoolStore(PoolStore):
     PREFIXES = {
-        "FR": "+339000",
-        "US": "+155500",
+        "mobile": {
+            "FR": "+337990",
+            "US": "+155520",
+        },
+        "local": {
+            "FR": "+331900",
+            "US": "+140820",
+        },
     }
 
     def __init__(self, path: Path, logger: logging.Logger, *, default_batch: int = 2):
@@ -442,21 +452,23 @@ class MockPoolStore(PoolStore):
             seed = [
                 {
                     "country_iso": "FR",
-                    "phone_number": "+33900000001",
+                    "phone_number": "+33799000001",
                     "status": "available",
                     "friendly_name": "Pool-FR-1",
                     "date_achat": dt.datetime.utcnow().isoformat(),
                     "date_attribution": "",
                     "attribution_to_client_name": "",
+                    "number_type": "mobile",
                 },
                 {
                     "country_iso": "US",
-                    "phone_number": "+15550000001",
+                    "phone_number": "+15552000001",
                     "status": "available",
                     "friendly_name": "Pool-US-1",
                     "date_achat": dt.datetime.utcnow().isoformat(),
                     "date_attribution": "",
                     "attribution_to_client_name": "",
+                    "number_type": "mobile",
                 },
             ]
             self.path.write_text(json.dumps(seed, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -470,15 +482,23 @@ class MockPoolStore(PoolStore):
     def _dump(self, rows: list[dict[str, Any]]) -> None:
         self.path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def _make_number(self, country_iso: str, index: int) -> str:
-        prefix = self.PREFIXES.get(country_iso.upper(), f"+999{country_iso.upper()}")
+    def _make_number(self, country_iso: str, index: int, number_type: str) -> str:
+        prefixes_for_type = self.PREFIXES.get(number_type, {})
+        prefix = prefixes_for_type.get(country_iso.upper(), f"+999{number_type.upper()}{country_iso.upper()}")
         return f"{prefix}{index:05d}"
 
     def list_available(self, country_iso: str) -> list[dict[str, Any]]:
         country = country_iso.upper()
         return [rec for rec in self._load() if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available"]
 
-    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str) -> list[str]:
+    def provision(
+        self,
+        country_iso: str,
+        batch_size: int,
+        *,
+        friendly_prefix: str,
+        number_type: str = "mobile",
+    ) -> list[str]:
         country = country_iso.upper()
         rows = self._load()
         existing = [r for r in rows if r.get("country_iso") == country]
@@ -486,7 +506,7 @@ class MockPoolStore(PoolStore):
         added: list[str] = []
 
         for offset in range(batch_size):
-            num = self._make_number(country, start_idx + offset)
+            num = self._make_number(country, start_idx + offset, number_type)
             rows.append(
                 {
                     "country_iso": country,
@@ -496,6 +516,7 @@ class MockPoolStore(PoolStore):
                     "date_achat": dt.datetime.utcnow().isoformat(),
                     "date_attribution": "",
                     "attribution_to_client_name": "",
+                    "number_type": number_type,
                 }
             )
             added.append(num)
@@ -504,21 +525,65 @@ class MockPoolStore(PoolStore):
         self.logger.info("Pool mock approvisionné", extra={"country": country, "count": batch_size})
         return added
 
-    def assign_number(self, country_iso: str, friendly_name: str, client_name: str) -> str:
+    def assign_number(
+        self, country_iso: str, friendly_name: str, client_name: str, *, number_type: str = "mobile"
+    ) -> str:
         country = country_iso.upper()
         rows = self._load()
         available_idx = None
+        requested_type = (number_type or "mobile").lower()
         for idx, rec in enumerate(rows):
-            if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available":
+            if (
+                rec.get("country_iso") == country
+                and str(rec.get("status")).lower() == "available"
+                and str(rec.get("number_type", "mobile")).lower() == requested_type
+            ):
                 available_idx = idx
                 break
 
+        if available_idx is None and requested_type == "mobile":
+            for idx, rec in enumerate(rows):
+                if (
+                    rec.get("country_iso") == country
+                    and str(rec.get("status")).lower() == "available"
+                    and str(rec.get("number_type", "")).lower() == "local"
+                ):
+                    available_idx = idx
+                    self.logger.info(
+                        "Aucun mobile mock disponible, basculement sur un numéro local.",
+                        extra={"country": country},
+                    )
+                    break
+
         if available_idx is None:
-            self.provision(country, self.default_batch, friendly_prefix=f"Pool-{country}")
+            self.provision(
+                country,
+                self.default_batch,
+                friendly_prefix=f"Pool-{country}",
+                number_type=requested_type,
+            )
             rows = self._load()
             for idx, rec in enumerate(rows):
-                if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available":
+                if (
+                    rec.get("country_iso") == country
+                    and str(rec.get("status")).lower() == "available"
+                    and str(rec.get("number_type", "mobile")).lower() == requested_type
+                ):
                     available_idx = idx
+                    break
+
+        if available_idx is None and requested_type == "mobile":
+            for idx, rec in enumerate(rows):
+                if (
+                    rec.get("country_iso") == country
+                    and str(rec.get("status")).lower() == "available"
+                    and str(rec.get("number_type", "")).lower() == "local"
+                ):
+                    available_idx = idx
+                    self.logger.info(
+                        "Aucun mobile mock disponible après provision, basculement sur un numéro local.",
+                        extra={"country": country},
+                    )
                     break
 
         if available_idx is None:
@@ -548,21 +613,26 @@ class LivePoolStore(PoolStore):
 
         return TwilioClient.list_available(country_iso.upper())
 
-    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str) -> list[str]:
+    def provision(
+        self, country_iso: str, batch_size: int, *, friendly_prefix: str, number_type: str = "mobile"
+    ) -> list[str]:
         from integrations.twilio_client import TwilioClient
 
-        TwilioClient.fill_pool(country_iso.upper(), batch_size)
+        TwilioClient.fill_pool(country_iso.upper(), batch_size, number_type=number_type)
         self.logger.info("Pool Twilio approvisionné", extra={"country": country_iso, "count": batch_size})
         refreshed = TwilioClient.list_available(country_iso.upper())
         return [r.get("phone_number", "") for r in refreshed if str(r.get("status", "")).lower() == "available"]
 
-    def assign_number(self, country_iso: str, friendly_name: str, client_name: str) -> str:
+    def assign_number(
+        self, country_iso: str, friendly_name: str, client_name: str, *, number_type: str = "mobile"
+    ) -> str:
         from integrations.twilio_client import TwilioClient
 
         return TwilioClient.buy_number_for_client(
             friendly_name=friendly_name,
             country=country_iso.upper(),
             attribution_to_client_name=client_name,
+            number_type=number_type,
         )
 
 class SheetsStore(ClientStore):
@@ -1008,7 +1078,10 @@ def do_pool_list(args: argparse.Namespace, pool_store: PoolStore, logger: loggin
 def do_pool_provision(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
     country = (args.country or "FR").upper()
     batch_size = max(1, int(args.batch_size or 1))
-    added = pool_store.provision(country, batch_size, friendly_prefix=f"Pool-{country}")
+    number_type = str(getattr(args, "number_type", "mobile") or "mobile").lower()
+    added = pool_store.provision(
+        country, batch_size, friendly_prefix=f"Pool-{country}", number_type=number_type
+    )
     logger.info("Approvisionnement terminé", extra={"country": country, "count": len(added)})
     print(json.dumps({"country": country, "added": added}, indent=2, ensure_ascii=False))
     return 0
@@ -1056,7 +1129,10 @@ def do_pool_assign(
             print("Attribution annulée.\n")
             return 0
 
-    proxy = pool_store.assign_number(country, friendly, client.client_name)
+    number_type = str(getattr(args, "number_type", "mobile") or "mobile").lower()
+    proxy = pool_store.assign_number(
+        country, friendly, client.client_name, number_type=number_type
+    )
 
     client.client_proxy_number = normalize_phone_digits(proxy, label="proxy")
     store.save(client)
@@ -1125,6 +1201,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     c6.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
     c6.add_argument("--batch-size", type=int, default=int(os.getenv("TWILIO_POOL_SIZE", "2")))
+    c6.add_argument(
+        "--number-type",
+        choices=["mobile", "local"],
+        default="mobile",
+        help="Type de numéro à acheter (mobile par défaut, local sinon).",
+    )
 
     c7 = sp.add_parser(
         "pool-assign",
@@ -1132,6 +1214,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     c7.add_argument("--client-id", required=True)
     c7.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation interactive.")
+    c7.add_argument(
+        "--number-type",
+        choices=["mobile", "local"],
+        default="mobile",
+        help="Type de numéro à attribuer (mobile par défaut, local sinon).",
+    )
 
     return p
 
