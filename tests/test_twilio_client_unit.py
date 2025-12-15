@@ -131,3 +131,16 @@ def test_purchase_number_local_bundle_address_mismatch(monkeypatch):
 
     assert "rattachée au bundle" in str(err.value)
 
+
+def test_purchase_number_local_bundle_required(monkeypatch):
+    exc = TwilioRestException(status=400, uri="", msg="", code=21649)
+    dummy_twilio = DummyTwilio(create_exception=exc)
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+    monkeypatch.setattr(twilio_client.settings, "TWILIO_BUNDLE_SID", None)
+    monkeypatch.setattr(twilio_client.settings, "TWILIO_ADDRESS_SID", None)
+
+    with pytest.raises(RuntimeError) as err:
+        TwilioClient._purchase_number(country="FR", friendly_name="Test", number_type="local")
+
+    assert "bundle" in str(err.value)
+

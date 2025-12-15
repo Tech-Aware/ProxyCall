@@ -81,6 +81,11 @@ class TwilioClient:
         try:
             incoming = twilio.incoming_phone_numbers.create(**create_kwargs)
         except TwilioRestException as exc:  # pragma: no cover - gestion détaillée testée plus bas
+            if exc.code == 21649:
+                raise RuntimeError(
+                    "L'achat du numéro requiert un bundle et une adresse. "
+                    "Renseignez TWILIO_BUNDLE_SID et TWILIO_ADDRESS_SID (adresse appartenant au bundle)."
+                ) from exc
             if exc.code == 21651:
                 raise RuntimeError(
                     "L'adresse fournie n'est pas rattachée au bundle Twilio. "

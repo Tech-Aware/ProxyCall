@@ -1081,9 +1081,12 @@ def do_pool_provision(args: argparse.Namespace, pool_store: PoolStore, logger: l
     country = (args.country or "FR").upper()
     batch_size = max(1, int(args.batch_size or 1))
     number_type = str(getattr(args, "number_type", "mobile") or "mobile").lower()
-    added = pool_store.provision(
-        country, batch_size, friendly_prefix=f"Pool-{country}", number_type=number_type
-    )
+    try:
+        added = pool_store.provision(
+            country, batch_size, friendly_prefix=f"Pool-{country}", number_type=number_type
+        )
+    except RuntimeError as exc:
+        raise ExternalServiceError(str(exc)) from exc
     logger.info("Approvisionnement terminé", extra={"country": country, "count": len(added)})
     print(json.dumps({"country": country, "added": added}, indent=2, ensure_ascii=False))
     return 0
@@ -1479,6 +1482,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         try:
                             do_pool_provision(args_pool, pool_store, logger)
                         except CLIError as exc:
+                            print(f"Erreur: {exc}\n")
                             logger.error("Erreur approvisionnement pool: %s", exc)
                         continue
 
