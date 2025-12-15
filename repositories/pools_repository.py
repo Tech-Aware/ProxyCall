@@ -21,6 +21,15 @@ class PoolsRepository:
     """Gestion du pool de numéros Twilio via Google Sheets."""
 
     @staticmethod
+    def list_all() -> List[Dict[str, str]]:
+        try:
+            sheet = SheetsClient.get_pools_sheet()
+            return sheet.get_all_records()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Impossible de lire la feuille TwilioPools", exc_info=exc)
+            return []
+
+    @staticmethod
     def list_available(country_iso: str) -> List[Dict[str, str]]:
         try:
             sheet = SheetsClient.get_pools_sheet()

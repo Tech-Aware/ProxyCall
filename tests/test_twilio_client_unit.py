@@ -8,13 +8,17 @@ from integrations.twilio_client import TwilioClient
 
 
 class DummyPoolsRepo:
-    def __init__(self, available=None):
+    def __init__(self, available=None, records=None):
         self.available = list(available or [])
+        self.records = list(records) if records is not None else list(self.available)
         self.mark_assigned_calls = []
         self.saved_numbers = []
 
     def list_available(self, country_iso):
         return list(self.available)
+
+    def list_all(self):
+        return list(self.records)
 
     def mark_assigned(self, **kwargs):
         self.mark_assigned_calls.append(kwargs)
@@ -23,11 +27,20 @@ class DummyPoolsRepo:
         self.saved_numbers.append(kwargs)
         # Simule l'ajout d'un numéro disponible dans le pool
         self.available.append({"phone_number": kwargs.get("phone_number")})
+        self.records.append(
+            {
+                "phone_number": kwargs.get("phone_number"),
+                "country_iso": kwargs.get("country_iso"),
+                "status": kwargs.get("status", "available"),
+            }
+        )
 
 
 class DummyNumber:
-    def __init__(self, phone_number="+33123456789"):
+    def __init__(self, phone_number="+33123456789", friendly_name="", iso_country="FR"):
         self.phone_number = phone_number
+        self.friendly_name = friendly_name
+        self.iso_country = iso_country
 
     def update(self, **kwargs):
         return kwargs
@@ -60,8 +73,10 @@ class DummyTwilio:
         self.purchase_calls.append(payload)
         return DummyNumber(phone_number)
 
-    def _list(self, phone_number):
-        return [DummyNumber(phone_number)]
+    def _list(self, phone_number=None):
+        if phone_number:
+            return [DummyNumber(phone_number)]
+        return list(self._numbers)
 
 
 @pytest.fixture(autouse=True)
@@ -143,4 +158,48 @@ def test_purchase_number_local_bundle_required(monkeypatch):
         TwilioClient._purchase_number(country="FR", friendly_name="Test", number_type="local")
 
     assert "bundle" in str(err.value)
+
+
+def test_sync_twilio_numbers_adds_missing(monkeypatch):
+    existing_records = [
+        {"phone_number": "+33123456789", "country_iso": "FR", "status": "available"}
+    ]
+    dummy_repo = DummyPoolsRepo(records=existing_records)
+    monkeypatch.setattr(twilio_client, "PoolsRepository", dummy_repo)
+
+    dummy_twilio = DummyTwilio(
+        numbers=[
+            DummyNumber("+33123456789", friendly_name="Existant", iso_country="FR"),
+            DummyNumber("+44777000000", friendly_name="Nouveau", iso_country="GB"),
+        ]
+    )
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+
+    result = TwilioClient.sync_twilio_numbers_with_sheet()
+
+    assert "+44777000000" in result["added_numbers"]
+    assert "+44777000000" in result["missing_numbers"]
+    assert dummy_repo.saved_numbers[0]["country_iso"] == "GB"
+
+
+def test_sync_twilio_numbers_preview_only(monkeypatch):
+    existing_records = [
+        {"phone_number": "+33123456789", "country_iso": "FR", "status": "available"}
+    ]
+    dummy_repo = DummyPoolsRepo(records=existing_records)
+    monkeypatch.setattr(twilio_client, "PoolsRepository", dummy_repo)
+
+    dummy_twilio = DummyTwilio(
+        numbers=[
+            DummyNumber("+33123456789", friendly_name="Existant", iso_country="FR"),
+            DummyNumber("+44777000000", friendly_name="Nouveau", iso_country="GB"),
+        ]
+    )
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+
+    result = TwilioClient.sync_twilio_numbers_with_sheet(apply=False)
+
+    assert result["missing_numbers"] == ["+44777000000"]
+    assert not result["added_numbers"]
+    assert not dummy_repo.saved_numbers
 

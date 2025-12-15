@@ -135,6 +135,85 @@ class TwilioClient:
         return PoolsRepository.list_available(country)
 
     @classmethod
+    def list_twilio_numbers(cls):
+        """Liste tous les numéros actuellement possédés sur le compte Twilio."""
+
+        try:
+            incoming_numbers = twilio.incoming_phone_numbers.list()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception(
+                "Impossible de récupérer les numéros Twilio existants", exc_info=exc
+            )
+            return []
+
+        numbers = []
+        for number in incoming_numbers:
+            numbers.append(
+                {
+                    "phone_number": getattr(number, "phone_number", ""),
+                    "friendly_name": getattr(number, "friendly_name", "") or "",
+                    "country_iso": getattr(number, "iso_country", "") or "",
+                }
+            )
+        return numbers
+
+    @classmethod
+    def sync_twilio_numbers_with_sheet(
+        cls,
+        *,
+        apply: bool = True,
+        twilio_numbers: list[dict[str, str]] | None = None,
+    ):
+        """
+        Synchronise la feuille TwilioPools avec les numéros présents côté Twilio.
+
+        :param apply: lorsqu'il est à False, la méthode ne modifie pas la feuille et
+            retourne uniquement les numéros manquants.
+        :param twilio_numbers: liste pré-récupérée pour éviter un double appel à
+            l'API Twilio.
+        :returns: dictionnaire contenant tous les numéros Twilio, les numéros
+            absents de la feuille, ainsi que ceux réellement ajoutés.
+        """
+
+        numbers_from_twilio = twilio_numbers or cls.list_twilio_numbers()
+        existing_records = PoolsRepository.list_all()
+        existing_numbers = {
+            str(rec.get("phone_number"))
+            for rec in existing_records
+            if rec.get("phone_number")
+        }
+
+        missing_numbers: list[str] = []
+        added_numbers: list[str] = []
+
+        for number in numbers_from_twilio:
+            phone_number = number.get("phone_number")
+            if not phone_number or phone_number in existing_numbers:
+                continue
+
+            missing_numbers.append(phone_number)
+            if not apply:
+                continue
+
+            country_iso = (
+                number.get("country_iso") or settings.TWILIO_PHONE_COUNTRY
+            ).upper()
+            PoolsRepository.save_number(
+                country_iso=country_iso,
+                phone_number=phone_number,
+                status="available",
+                friendly_name=number.get("friendly_name"),
+                date_achat=datetime.utcnow().isoformat(),
+            )
+            added_numbers.append(phone_number)
+
+        return {
+            "twilio_numbers": numbers_from_twilio,
+            "missing_numbers": missing_numbers,
+            "added_numbers": added_numbers,
+        }
+
+    @classmethod
     def buy_number_for_client(
         cls,
         friendly_name: str,

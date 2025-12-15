@@ -293,6 +293,11 @@ class PoolStore:
     ) -> str:
         raise NotImplementedError
 
+    def sync_with_provider(
+        self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class MockJsonStore(ClientStore):
     def __init__(self, path: Path, logger: logging.Logger):
@@ -604,6 +609,11 @@ class MockPoolStore(PoolStore):
         self._dump(rows)
         return str(target.get("phone_number"))
 
+    def sync_with_provider(
+        self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        raise ValidationError("Synchronisation disponible uniquement en mode LIVE.")
+
 
 class LivePoolStore(PoolStore):
     def __init__(self, logger: logging.Logger, *, default_batch: int = 2):
@@ -636,6 +646,27 @@ class LivePoolStore(PoolStore):
             attribution_to_client_name=client_name,
             number_type=number_type,
         )
+
+    def sync_with_provider(
+        self,
+        *,
+        apply: bool = True,
+        twilio_numbers: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        from integrations.twilio_client import TwilioClient
+
+        sync_result = TwilioClient.sync_twilio_numbers_with_sheet(
+            apply=apply, twilio_numbers=twilio_numbers
+        )
+        self.logger.info(
+            "Synchronisation Twilio -> TwilioPools terminée",
+            extra={
+                "added": len(sync_result.get("added_numbers", [])),
+                "missing": len(sync_result.get("missing_numbers", [])),
+                "applied": apply,
+            },
+        )
+        return sync_result
 
 class SheetsStore(ClientStore):
     SCOPES = [
@@ -1146,6 +1177,67 @@ def do_pool_assign(
     return 0
 
 
+def do_pool_sync(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
+    preview_result = pool_store.sync_with_provider(apply=False)
+
+    twilio_numbers = preview_result.get("twilio_numbers", [])
+    missing_numbers = preview_result.get("missing_numbers", [])
+
+    print(f"Numéros trouvés côté Twilio ({len(twilio_numbers)}) :")
+    for num in twilio_numbers:
+        print(
+            "- {number} (friendly_name={friendly}, pays={country})".format(
+                number=num.get("phone_number", ""),
+                friendly=num.get("friendly_name", ""),
+                country=num.get("country_iso", ""),
+            )
+        )
+
+    if not missing_numbers:
+        print("\nTous les numéros Twilio sont déjà présents dans TwilioPools.")
+        logger.info(
+            "Aucun numéro manquant côté TwilioPools",
+            extra={"missing": 0},
+        )
+        return 0
+
+    print(
+        f"\n{len(missing_numbers)} numéro(s) Twilio absent(s) de TwilioPools :"
+    )
+    for num in missing_numbers:
+        print(f"- {num}")
+
+    auto_confirm = bool(getattr(args, "yes", False))
+    if not auto_confirm:
+        confirm = input(
+            "Importer ces numéros manquants dans TwilioPools ? (o/N) : "
+        ).strip().lower()
+        if confirm not in {"o", "oui", "y", "yes"}:
+            logger.info(
+                "Import des numéros manquants annulé par l'utilisateur",
+                extra={"missing": len(missing_numbers)},
+            )
+            print("Import annulé.\n")
+            return 0
+
+    sync_result = pool_store.sync_with_provider(
+        apply=True, twilio_numbers=twilio_numbers
+    )
+    added_numbers = sync_result.get("added_numbers", [])
+
+    print(
+        f"\n{len(added_numbers)} numéro(s) importé(s) dans TwilioPools :"
+    )
+    for num in added_numbers:
+        print(f"- {num}")
+
+    logger.info(
+        "Synchronisation TwilioPools réalisée",
+        extra={"added": len(added_numbers)},
+    )
+    return 0
+
+
 # =========================
 # CLI wiring
 # =========================
@@ -1225,6 +1317,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_NUMBER_TYPE,
         help="Type de numéro à attribuer (mobile par défaut, local sinon).",
     )
+
+    c8 = sp.add_parser(
+        "pool-sync",
+        help="Affiche les numéros Twilio et ajoute les manquants dans TwilioPools.",
+    )
+    c8.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation avant import.")
 
     return p
 
@@ -1451,6 +1549,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                     print("  1) Lister les numéros disponibles par pays")
                     print("  2) Approvisionner le pool")
                     print("  3) Attribuer un numéro du pool à un client")
+                    print("  4) Vérifier et compléter TwilioPools avec les numéros Twilio")
                     print("  0) Retour au menu principal")
                     pool_choice = input("Votre sélection : ").strip() or "0"
 
@@ -1500,7 +1599,14 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             logger.error("Erreur attribution pool: %s", exc)
                         continue
 
-                    print("Merci de choisir 0, 1, 2 ou 3.\n")
+                    if pool_choice == "4":
+                        try:
+                            do_pool_sync(argparse.Namespace(yes=False), pool_store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur synchronisation pool: %s", exc)
+                        continue
+
+                    print("Merci de choisir 0, 1, 2, 3 ou 4.\n")
                 continue
 
             logger.warning("Choix inconnu: %s", choice)
@@ -1571,6 +1677,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return do_pool_provision(args, pool_store, logger)
         if args.cmd == "pool-assign":
             return do_pool_assign(args, store, pool_store, logger)
+        if args.cmd == "pool-sync":
+            return do_pool_sync(args, pool_store, logger)
 
         raise ValidationError("Commande inconnue.")
     except CLIError as e:
