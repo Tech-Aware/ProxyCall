@@ -112,6 +112,10 @@ class TwilioClient:
                 status="available",
                 friendly_name=friendly,
                 date_achat=datetime.utcnow().isoformat(),
+                number_type=number_type,  # <-- AJOUT
+                reserved_token="",
+                reserved_at="",
+                reserved_by_client_id="",
             )
 
     @classmethod
@@ -223,6 +227,10 @@ class TwilioClient:
                 status="available",
                 friendly_name=number.get("friendly_name"),
                 date_achat=datetime.utcnow().isoformat(),
+                number_type=settings.TWILIO_NUMBER_TYPE,  # <-- AJOUT (simple)
+                reserved_token="",
+                reserved_at="",
+                reserved_by_client_id="",
             )
             added_numbers.append(phone_number)
 
@@ -234,51 +242,74 @@ class TwilioClient:
 
     @classmethod
     def buy_number_for_client(
-        cls,
-        friendly_name: str,
-        country: str | None = None,
-        attribution_to_client_name: str | None = None,
-        number_type: str = settings.TWILIO_NUMBER_TYPE,
+            cls,
+            friendly_name: str,
+            client_id: int,
+            country: str | None = None,
+            attribution_to_client_name: str | None = None,
+            number_type: str = settings.TWILIO_NUMBER_TYPE,
     ) -> str:
         """
-        Récupère un numéro dans le pool du pays demandé, ou achète un batch
-        de numéros si le pool est vide.
+        Attribue un numéro EXISTANT depuis TwilioPools (Google Sheets).
 
-        :param friendly_name: label appliqué au numéro attribué au client
-        :param country: code ISO pays attendu par l'API Twilio (ex: "FR", "US")
-        :param number_type: type de numéro à acheter si nécessaire ("mobile" par défaut)
+        IMPORTANT :
+        - Cette méthode ne doit PAS acheter de numéro (pas de fallback _fill_pool).
+        - Si aucun numéro n'est disponible dans TwilioPools, on lève une erreur claire.
         """
+        country_iso = (country or settings.TWILIO_PHONE_COUNTRY).upper()
 
-        country_iso = country or settings.TWILIO_PHONE_COUNTRY
-        available_records = PoolsRepository.list_available(country_iso)
+        # 1) Réserver un numéro disponible (safe-ish concurrence)
+        reserved = PoolsRepository.reserve_first_available(
+            country_iso=country_iso,
+            number_type=number_type,
+            client_id=client_id,
+        )
 
-        if not available_records:
-            cls._fill_pool(
-                country_iso,
-                settings.TWILIO_POOL_SIZE,
-                number_type=number_type,
+        # 2) Pas de fallback achat ici (sinon on retombe sur les erreurs bundle/adresse)
+        if not reserved:
+            raise RuntimeError(
+                f"Aucun numéro disponible dans TwilioPools pour {country_iso} ({number_type}). "
+                "Ajoute d'abord des numéros dans TwilioPools (pool-sync / ajout manuel) puis réessaye."
             )
-            available_records = PoolsRepository.list_available(country_iso)
 
-        if not available_records:
-            raise RuntimeError(f"Aucun numéro disponible pour le pays {country_iso}.")
+        row_index = int(reserved["row_index"])
+        number = reserved["phone_number"]
+        cls.ensure_voice_webhook(number)
 
-        record = available_records[0]
-        number = record.get("phone_number")
-
-        # Optionnel : on renomme le numéro pour la visibilité côté Twilio
+        # Optionnel : renommer côté Twilio (non bloquant)
         try:
-            twilio.incoming_phone_numbers.list(phone_number=number)[0].update(
-                friendly_name=friendly_name
-            )
+            incoming = twilio.incoming_phone_numbers.list(phone_number=number, limit=1)
+            if incoming:
+                incoming[0].update(
+                    voice_url=settings.VOICE_WEBHOOK_URL,
+                )
         except Exception:
-            # Pas bloquant : le numéro reste fonctionnel même sans renommage
             pass
 
-        PoolsRepository.mark_assigned(
-            phone_number=number,
+        # 3) Finaliser: reserved -> assigned
+        PoolsRepository.mark_assigned_reserved(
+            row_index=row_index,
+            friendly_name=friendly_name,
             date_attribution=datetime.utcnow().isoformat(),
             attribution_to_client_name=attribution_to_client_name,
         )
 
         return number
+
+    @staticmethod
+    def ensure_voice_webhook(phone_number: str) -> None:
+        """
+        Met à jour voice_url du numéro Twilio avec settings.VOICE_WEBHOOK_URL.
+        Non bloquant si le numéro est introuvable.
+        """
+        try:
+            incoming = twilio.incoming_phone_numbers.list(phone_number=phone_number, limit=1)
+            if not incoming:
+                return
+            incoming[0].update(voice_url=settings.VOICE_WEBHOOK_URL)
+        except Exception:
+            # On ne bloque pas l'attribution si l'update échoue
+            return
+
+
+

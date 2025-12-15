@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
 
-DEFAULT_NUMBER_TYPE = os.getenv("TWILIO_NUMBER_TYPE", "mobile").lower()
+DEFAULT_NUMBER_TYPE = os.getenv("TWILIO_NUMBER_TYPE", "national").lower()
 
 # --- Optional deps (LIVE + TwiML) ---
 try:
@@ -637,13 +637,13 @@ class LivePoolStore(PoolStore):
         refreshed = TwilioClient.list_available(country_iso.upper())
         return [r.get("phone_number", "") for r in refreshed if str(r.get("status", "")).lower() == "available"]
 
-    def assign_number(
-        self, country_iso: str, friendly_name: str, client_name: str, *, number_type: str = "mobile"
-    ) -> str:
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *,
+                      number_type: str = "mobile") -> str:
         from integrations.twilio_client import TwilioClient
 
         return TwilioClient.buy_number_for_client(
             friendly_name=friendly_name,
+            client_id=client_id,
             country=country_iso.upper(),
             attribution_to_client_name=client_name,
             number_type=number_type,
@@ -1169,8 +1169,11 @@ def do_pool_assign(
 
     number_type = str(getattr(args, "number_type", "mobile") or "mobile").lower()
     proxy = pool_store.assign_number(
-        country, friendly, client.client_name, number_type=number_type
-    )
+        country,
+        friendly,
+        client.client_name,
+        client_id,
+        number_type=number_type)
 
     client.client_proxy_number = normalize_phone_digits(proxy, label="proxy")
     store.save(client)
@@ -1302,7 +1305,7 @@ def build_parser() -> argparse.ArgumentParser:
     c6.add_argument("--batch-size", type=int, default=int(os.getenv("TWILIO_POOL_SIZE", "2")))
     c6.add_argument(
         "--number-type",
-        choices=["mobile", "local"],
+        choices=["national", "local", "mobile"],
         default=DEFAULT_NUMBER_TYPE,
         help="Type de numéro à acheter (mobile par défaut, local sinon).",
     )
@@ -1315,7 +1318,7 @@ def build_parser() -> argparse.ArgumentParser:
     c7.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation interactive.")
     c7.add_argument(
         "--number-type",
-        choices=["mobile", "local"],
+        choices=["national", "local", "mobile"],
         default=DEFAULT_NUMBER_TYPE,
         help="Type de numéro à attribuer (mobile par défaut, local sinon).",
     )
@@ -1505,16 +1508,14 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             print("Ce client possède déjà un proxy.\n")
                             continue
 
-                        args_client = argparse.Namespace(
-                            client_id=existing.client_id,
-                            name=existing.client_name,
-                            client_mail=existing.client_mail,
-                            client_real_phone=existing.client_real_phone,
-                            assign_proxy=True,
-                            mode=args.mode,
+                        args_pool = argparse.Namespace(
+                            client_id=str(existing.client_id),
+                            yes=False,  # demande confirmation (comme avant)
+                            number_type=DEFAULT_NUMBER_TYPE,
                         )
+
                         try:
-                            do_create_client(args_client, store, logger)
+                            do_pool_assign(args_pool, store, pool_store, logger)
                         except CLIError as exc:
                             logger.error("Erreur attribution proxy: %s", exc)
                         continue
