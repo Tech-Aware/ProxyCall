@@ -7,7 +7,6 @@ class Settings:
     TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID")
     TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN")
     TWILIO_ADDRESS_SID: str | None = os.getenv("TWILIO_ADDRESS_SID")
-    TWILIO_BUNDLE_SID: str | None = os.getenv("TWILIO_BUNDLE_SID")
 
     PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL")  # ex: https://xxxx.ngrok.io
     VOICE_WEBHOOK_URL: str = f"{PUBLIC_BASE_URL}/twilio/voice"

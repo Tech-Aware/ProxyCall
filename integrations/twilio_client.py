@@ -32,7 +32,6 @@ class TwilioClient:
         numéro local n'est disponible non plus.
         """
 
-        effective_number_type = number_type
         if number_type == "mobile":
             try:
                 available_numbers = (
@@ -53,14 +52,12 @@ class TwilioClient:
                 available_numbers = (
                     twilio.available_phone_numbers(country).local.list(limit=1)
                 )
-                effective_number_type = "local"
                 if not available_numbers:
                     raise RuntimeError(
                         f"Aucun numéro mobile ou local disponible pour le pays {country}."
                     )
         else:
             available_numbers = twilio.available_phone_numbers(country).local.list(limit=1)
-            effective_number_type = "local"
             if not available_numbers:
                 raise RuntimeError(
                     f"Aucun numéro local disponible pour le pays {country}."
@@ -80,8 +77,6 @@ class TwilioClient:
         }
         if settings.TWILIO_ADDRESS_SID:
             create_kwargs["address_sid"] = settings.TWILIO_ADDRESS_SID
-        if settings.TWILIO_BUNDLE_SID and effective_number_type == "local":
-            create_kwargs["bundle_sid"] = settings.TWILIO_BUNDLE_SID
 
         incoming = twilio.incoming_phone_numbers.create(**create_kwargs)
         return incoming.phone_number

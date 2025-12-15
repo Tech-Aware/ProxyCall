@@ -39,21 +39,16 @@ class DummyTwilio:
         self.update_calls = []
 
         self._available_local = types.SimpleNamespace(list=lambda limit=1: list(self._numbers))
-        self._available_mobile = types.SimpleNamespace(list=lambda limit=1: list(self._numbers))
 
         self.incoming_phone_numbers = types.SimpleNamespace(create=self._create, list=self._list)
 
     def available_phone_numbers(self, country):
-        return types.SimpleNamespace(local=self._available_local, mobile=self._available_mobile)
+        return types.SimpleNamespace(local=self._available_local)
 
-    def _create(self, phone_number, voice_url, friendly_name, **kwargs):
-        payload = {
-            "phone_number": phone_number,
-            "voice_url": voice_url,
-            "friendly_name": friendly_name,
-        }
-        payload.update(kwargs)
-        self.purchase_calls.append(payload)
+    def _create(self, phone_number, voice_url, friendly_name):
+        self.purchase_calls.append(
+            {"phone_number": phone_number, "voice_url": voice_url, "friendly_name": friendly_name}
+        )
         return DummyNumber(phone_number)
 
     def _list(self, phone_number):
