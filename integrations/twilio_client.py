@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 
+from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client as TwilioRest
 
 from app.config import settings
@@ -77,7 +78,16 @@ class TwilioClient:
         if settings.TWILIO_BUNDLE_SID and effective_number_type == "local":
             create_kwargs["bundle_sid"] = settings.TWILIO_BUNDLE_SID
 
-        incoming = twilio.incoming_phone_numbers.create(**create_kwargs)
+        try:
+            incoming = twilio.incoming_phone_numbers.create(**create_kwargs)
+        except TwilioRestException as exc:  # pragma: no cover - gestion détaillée testée plus bas
+            if exc.code == 21651:
+                raise RuntimeError(
+                    "L'adresse fournie n'est pas rattachée au bundle Twilio. "
+                    "Vérifiez que TWILIO_ADDRESS_SID correspond bien au bundle TWILIO_BUNDLE_SID."
+                ) from exc
+            raise
+
         return incoming.phone_number
 
     @classmethod
