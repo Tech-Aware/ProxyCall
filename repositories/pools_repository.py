@@ -24,7 +24,7 @@ class PoolsRepository:
     def list_all() -> List[Dict[str, str]]:
         try:
             sheet = SheetsClient.get_pools_sheet()
-            return sheet.get_all_records()
+            return sheet.get_all_records(numericise_ignore=["all"])
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception("Impossible de lire la feuille TwilioPools", exc_info=exc)
             return []

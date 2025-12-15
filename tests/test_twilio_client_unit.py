@@ -203,3 +203,26 @@ def test_sync_twilio_numbers_preview_only(monkeypatch):
     assert not result["added_numbers"]
     assert not dummy_repo.saved_numbers
 
+
+def test_sync_twilio_numbers_respects_sheet_formatting(monkeypatch):
+    existing_records = [
+        {"phone_number": " +33 1 23 45 67 89 ", "country_iso": "FR", "status": "available"},
+        {"phone_number": 44777000000, "country_iso": "GB", "status": "available"},
+    ]
+    dummy_repo = DummyPoolsRepo(records=existing_records)
+    monkeypatch.setattr(twilio_client, "PoolsRepository", dummy_repo)
+
+    dummy_twilio = DummyTwilio(
+        numbers=[
+            DummyNumber("+33123456789", friendly_name="Existant", iso_country="FR"),
+            DummyNumber("+44777000000", friendly_name="Existant2", iso_country="GB"),
+        ]
+    )
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+
+    result = TwilioClient.sync_twilio_numbers_with_sheet()
+
+    assert result["missing_numbers"] == []
+    assert result["added_numbers"] == []
+    assert not dummy_repo.saved_numbers
+

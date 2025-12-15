@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 
 from twilio.base.exceptions import TwilioRestException
@@ -157,6 +158,24 @@ class TwilioClient:
             )
         return numbers
 
+    @staticmethod
+    def _normalize_phone_number(number: str | None) -> str:
+        """Normalise les numéros pour comparaison (strip, suppression des espaces)."""
+
+        if number is None:
+            return ""
+
+        raw = str(number).strip()
+        if not raw:
+            return ""
+
+        digits_only = re.sub(r"\D", "", raw)
+
+        if not digits_only:
+            return ""
+
+        return f"+{digits_only}"
+
     @classmethod
     def sync_twilio_numbers_with_sheet(
         cls,
@@ -177,17 +196,17 @@ class TwilioClient:
 
         numbers_from_twilio = twilio_numbers or cls.list_twilio_numbers()
         existing_records = PoolsRepository.list_all()
-        existing_numbers = {
-            str(rec.get("phone_number"))
-            for rec in existing_records
-            if rec.get("phone_number")
-        }
+        existing_numbers: set[str] = set()
+        for rec in existing_records:
+            normalized = cls._normalize_phone_number(rec.get("phone_number"))
+            if normalized:
+                existing_numbers.add(normalized)
 
         missing_numbers: list[str] = []
         added_numbers: list[str] = []
 
         for number in numbers_from_twilio:
-            phone_number = number.get("phone_number")
+            phone_number = cls._normalize_phone_number(number.get("phone_number"))
             if not phone_number or phone_number in existing_numbers:
                 continue
 
