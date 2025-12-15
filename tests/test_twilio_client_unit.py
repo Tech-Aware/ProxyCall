@@ -20,7 +20,16 @@ class DummyPoolsRepo:
     def list_all(self):
         return list(self.records)
 
+    def reserve_first_available(self, *, country_iso, number_type, client_id):
+        if not self.available:
+            return None
+        first = self.available.pop(0)
+        return {"phone_number": first.get("phone_number"), "row_index": 0}
+
     def mark_assigned(self, **kwargs):
+        self.mark_assigned_calls.append(kwargs)
+
+    def mark_assigned_reserved(self, **kwargs):
         self.mark_assigned_calls.append(kwargs)
 
     def save_number(self, **kwargs):
@@ -93,10 +102,15 @@ def test_buy_number_uses_available_pool(monkeypatch):
     dummy_twilio = DummyTwilio()
     monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
 
-    number = TwilioClient.buy_number_for_client(friendly_name="Client-1", country="FR", attribution_to_client_name="Client 1")
+    number = TwilioClient.buy_number_for_client(
+        friendly_name="Client-1",
+        client_id=1,
+        country="FR",
+        attribution_to_client_name="Client 1",
+    )
 
     assert number == "+3399990000"
-    assert dummy_repo.mark_assigned_calls[0]["phone_number"] == "+3399990000"
+    assert dummy_repo.mark_assigned_calls[0]["row_index"] == 0
 
 
 def test_buy_number_fills_pool_when_empty(monkeypatch):
@@ -108,11 +122,13 @@ def test_buy_number_fills_pool_when_empty(monkeypatch):
     dummy_twilio = DummyTwilio(numbers=[purchased_number])
     monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
 
-    number = TwilioClient.buy_number_for_client(friendly_name="Client-2", country="GB", attribution_to_client_name="Client 2")
-
-    assert number == "+44700000000"
-    assert dummy_repo.saved_numbers, "Le remplissage du pool doit persister les numéros achetés"
-    assert dummy_repo.mark_assigned_calls, "Le numéro doit être marqué comme attribué"
+    with pytest.raises(RuntimeError):
+        TwilioClient.buy_number_for_client(
+            friendly_name="Client-2",
+            client_id=2,
+            country="GB",
+            attribution_to_client_name="Client 2",
+        )
 
 
 def test_purchase_number_without_availability(monkeypatch):

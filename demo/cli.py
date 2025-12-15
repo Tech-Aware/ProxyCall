@@ -14,17 +14,19 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
+from app.config import settings
 
 DEFAULT_NUMBER_TYPE = os.getenv("TWILIO_NUMBER_TYPE", "national").lower()
 
 # --- Optional deps (LIVE + TwiML) ---
 try:
     from twilio.rest import Client as TwilioRestClient
-    from twilio.base.exceptions import TwilioRestException
+    from twilio.base.exceptions import TwilioRestException, TwilioException
     from twilio.twiml.voice_response import VoiceResponse, Dial
 except Exception:  # pragma: no cover
     TwilioRestClient = None  # type: ignore
     TwilioRestException = Exception  # type: ignore
+    TwilioException = Exception  # type: ignore
     VoiceResponse = None  # type: ignore
     Dial = None  # type: ignore
 
@@ -621,6 +623,10 @@ class LivePoolStore(PoolStore):
     def __init__(self, logger: logging.Logger, *, default_batch: int = 2):
         self.logger = logger
         self.default_batch = default_batch
+        if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+            raise ConfigError(
+                "Variables TWILIO_ACCOUNT_SID et TWILIO_AUTH_TOKEN requises pour le mode LIVE."
+            )
 
     def list_available(self, country_iso: str) -> list[dict[str, Any]]:
         from integrations.twilio_client import TwilioClient
@@ -632,22 +638,46 @@ class LivePoolStore(PoolStore):
     ) -> list[str]:
         from integrations.twilio_client import TwilioClient
 
-        TwilioClient.fill_pool(country_iso.upper(), batch_size, number_type=number_type)
-        self.logger.info("Pool Twilio approvisionné", extra={"country": country_iso, "count": batch_size})
-        refreshed = TwilioClient.list_available(country_iso.upper())
-        return [r.get("phone_number", "") for r in refreshed if str(r.get("status", "")).lower() == "available"]
+        try:
+            TwilioClient.fill_pool(country_iso.upper(), batch_size, number_type=number_type)
+            self.logger.info(
+                "Pool Twilio approvisionné", extra={"country": country_iso, "count": batch_size}
+            )
+            refreshed = TwilioClient.list_available(country_iso.upper())
+            return [
+                r.get("phone_number", "")
+                for r in refreshed
+                if str(r.get("status", "")).lower() == "available"
+            ]
+        except TwilioException as exc:
+            raise ExternalServiceError(
+                "Authentification Twilio impossible. Vérifiez TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN.",
+                details={"msg": str(exc)},
+            ) from exc
+        except Exception as exc:  # pragma: no cover - garde-fou sur erreurs Twilio
+            raise ExternalServiceError("Erreur lors de l'approvisionnement du pool Twilio.", details={"msg": str(exc)}) from exc
 
     def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *,
                       number_type: str = "mobile") -> str:
         from integrations.twilio_client import TwilioClient
 
-        return TwilioClient.buy_number_for_client(
-            friendly_name=friendly_name,
-            client_id=client_id,
-            country=country_iso.upper(),
-            attribution_to_client_name=client_name,
-            number_type=number_type,
-        )
+        try:
+            return TwilioClient.buy_number_for_client(
+                friendly_name=friendly_name,
+                client_id=client_id,
+                country=country_iso.upper(),
+                attribution_to_client_name=client_name,
+                number_type=number_type,
+            )
+        except TwilioException as exc:
+            raise ExternalServiceError(
+                "Authentification Twilio impossible. Vérifiez TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN.",
+                details={"msg": str(exc)},
+            ) from exc
+        except Exception as exc:  # pragma: no cover - garde-fou sur erreurs Twilio
+            raise ExternalServiceError(
+                "Erreur lors de l'attribution d'un numéro Twilio.", details={"msg": str(exc)}
+            ) from exc
 
     def sync_with_provider(
         self,
@@ -657,18 +687,28 @@ class LivePoolStore(PoolStore):
     ) -> dict[str, Any]:
         from integrations.twilio_client import TwilioClient
 
-        sync_result = TwilioClient.sync_twilio_numbers_with_sheet(
-            apply=apply, twilio_numbers=twilio_numbers
-        )
-        self.logger.info(
-            "Synchronisation Twilio -> TwilioPools terminée",
-            extra={
-                "added": len(sync_result.get("added_numbers", [])),
-                "missing": len(sync_result.get("missing_numbers", [])),
-                "applied": apply,
-            },
-        )
-        return sync_result
+        try:
+            sync_result = TwilioClient.sync_twilio_numbers_with_sheet(
+                apply=apply, twilio_numbers=twilio_numbers
+            )
+            self.logger.info(
+                "Synchronisation Twilio -> TwilioPools terminée",
+                extra={
+                    "added": len(sync_result.get("added_numbers", [])),
+                    "missing": len(sync_result.get("missing_numbers", [])),
+                    "applied": apply,
+                },
+            )
+            return sync_result
+        except TwilioException as exc:
+            raise ExternalServiceError(
+                "Authentification Twilio impossible. Vérifiez TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN.",
+                details={"msg": str(exc)},
+            ) from exc
+        except Exception as exc:  # pragma: no cover - garde-fou sur erreurs Twilio
+            raise ExternalServiceError(
+                "Erreur lors de la synchronisation du pool Twilio.", details={"msg": str(exc)}
+            ) from exc
 
 class SheetsStore(ClientStore):
     SCOPES = [
