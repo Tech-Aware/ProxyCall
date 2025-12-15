@@ -67,6 +67,12 @@ class TwilioClient:
                 )
 
         phone_number = available_numbers[0].phone_number
+        if country.upper() == "FR" and effective_number_type == "local" and not settings.TWILIO_BUNDLE_SID:
+            raise RuntimeError(
+                "L'achat d'un numéro national français nécessite un bundle Twilio (TWILIO_BUNDLE_SID). "
+                "Ajoutez l'identifiant de bundle dans la configuration pour poursuivre."
+            )
+
         create_kwargs = {
             "phone_number": phone_number,
             "voice_url": settings.VOICE_WEBHOOK_URL,

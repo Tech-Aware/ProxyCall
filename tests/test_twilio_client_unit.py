@@ -104,6 +104,15 @@ def test_purchase_number_without_availability(monkeypatch):
         TwilioClient._purchase_number(country="FR", friendly_name="Test")
 
 
+def test_purchase_number_fr_local_requires_bundle(monkeypatch):
+    dummy_twilio = DummyTwilio(numbers=[DummyNumber("+33123456789")])
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+    monkeypatch.setattr(twilio_client.settings, "TWILIO_BUNDLE_SID", None)
+
+    with pytest.raises(RuntimeError):
+        TwilioClient._purchase_number(country="FR", friendly_name="Test", number_type="local")
+
+
 def test_purchase_number_local_uses_bundle_when_provided(monkeypatch):
     dummy_twilio = DummyTwilio()
     monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
