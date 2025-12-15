@@ -34,6 +34,7 @@ class ClientsRepository:
                     client_proxy_number=rec.get("client_proxy_number"),
                     client_iso_residency=rec.get("client_iso_residency"),
                     client_country_code=rec.get("client_country_code"),
+                    client_last_caller=rec.get("client_last_caller"),
                 )
         logger.info("Client introuvable dans Sheets", extra={"client_id": client_id})
         return None
@@ -65,6 +66,7 @@ class ClientsRepository:
                     client_proxy_number=rec.get("client_proxy_number"),
                     client_iso_residency=rec.get("client_iso_residency"),
                     client_country_code=rec.get("client_country_code"),
+                    client_last_caller=rec.get("client_last_caller"),
                 )
 
         logger.info("Aucun client trouvé pour ce proxy", extra={"proxy": target_norm})
@@ -95,3 +97,27 @@ class ClientsRepository:
             )
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception("Impossible d'enregistrer le client dans Sheets", exc_info=exc)
+
+    @staticmethod
+    def update_last_caller_by_proxy(proxy_number: str, caller_number: str) -> None:
+        sheet = SheetsClient.get_clients_sheet()
+
+        headers = sheet.row_values(1)
+        try:
+            last_caller_col = headers.index("client_last_caller") + 1
+        except ValueError:
+            raise RuntimeError("Colonne 'client_last_caller' introuvable dans la feuille Clients.")
+
+        target_norm = str(proxy_number or "").strip().replace(" ", "").replace("+", "")
+        records = sheet.get_all_records()
+
+        for row_idx, rec in enumerate(records, start=2):  # ligne 1 = header
+            rec_proxy_norm = str(rec.get("client_proxy_number") or "").strip().replace(" ", "").replace("+", "")
+            if rec_proxy_norm and rec_proxy_norm == target_norm:
+                sheet.update_cell(row_idx, last_caller_col, str(caller_number))
+                logger.info(
+                    "client_last_caller mis à jour",
+                    extra={"proxy": proxy_number, "last_caller": caller_number, "row": row_idx},
+                )
+                return
+

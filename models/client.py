@@ -11,3 +11,5 @@ class Client:
     client_proxy_number: Optional[str] = None
     client_iso_residency: Optional[str] = None
     client_country_code: Optional[str] = None
+    client_last_caller: Optional[str] = None
+

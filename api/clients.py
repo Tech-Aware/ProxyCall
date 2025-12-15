@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, HTTPException
-from app.services.clients_service import ClientsService, ClientAlreadyExistsError
+from services.clients_service import ClientsService, ClientAlreadyExistsError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ def get_client(client_id: str):
         "client_proxy_number": client.client_proxy_number,
         "client_iso_residency": client.client_iso_residency,
         "client_country_code": client.client_country_code,
+        "client_last_caller": client.client_last_caller,
     }
 
 

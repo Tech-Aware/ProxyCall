@@ -45,9 +45,10 @@ class CallRoutingService:
             extra={"client_country_code": client_cc, "caller_country_code": caller_cc},
         )
 
-        if client_cc and client_cc != caller_cc:
-            resp.say("Ce numéro n'est pas accessible depuis votre pays.", language="fr-FR")
-            return str(resp)
+        # TEMP: désactivation du filtrage par pays pour debug
+        # if client_cc and client_cc != caller_cc:
+        #     resp.say("Ce numéro n'est pas accessible depuis votre pays.", language="fr-FR")
+        #     return str(resp)
 
         proxy_e164 = proxy_number if proxy_number.startswith("+") else f"+{proxy_number}"
         real_e164 = (
@@ -55,6 +56,26 @@ class CallRoutingService:
             if str(client.client_real_phone).startswith("+")
             else f"+{client.client_real_phone}"
         )
+
+        # Si le client rappelle son proxy => on appelle le dernier livreur
+        if caller_number == real_e164:
+            last = str(getattr(client, "client_last_caller", "") or "").strip().replace(" ", "")
+            if not last:
+                resp.say("Aucun appelant récent.", language="fr-FR")
+                return str(resp)
+
+            if not last.startswith("+"):
+                last = "+" + last
+
+            dial = Dial(callerId=proxy_e164)
+            dial.number(last)
+            resp.append(dial)
+            return str(resp)
+
+        try:
+            ClientsRepository.update_last_caller_by_proxy(proxy_e164, caller_number)
+        except Exception as exc:
+            logger.warning("Impossible de mettre à jour client_last_caller", exc_info=exc)
 
         dial = Dial(callerId=proxy_e164)
         dial.number(real_e164)

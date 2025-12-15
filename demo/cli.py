@@ -196,25 +196,27 @@ def _validate_country_specific(phone_digits: str, *, label: str) -> None:
         )
 
 
-def normalize_phone_digits(phone: str | int, *, label: str = "numéro") -> int:
-    """Normalise un numéro pour stockage : uniquement des chiffres, pas de « + ».
-
-    Accepte des entrées préfixées par "+" ou contenant des espaces, mais persiste
-    toujours un entier (ex: "+33 6 01 02 03 04" -> 33601020304).
-    """
-
+def normalize_phone_digits(phone: str | int, *, label: str = "numéro") -> str:
     raw = str(phone or "").strip().replace(" ", "")
-    raw = raw.lstrip("+")
-
     if not raw:
         raise ValidationError(f"{label} manquant.")
 
-    if not PHONE_DIGITS_RE.match(raw):
+    # accepte 00xx
+    if raw.startswith("00"):
+        raw = "+" + raw[2:]
+
+    # accepte 33... ou +33...
+    if raw.startswith("+"):
+        digits = raw[1:]
+    else:
+        digits = raw
+
+    if not PHONE_DIGITS_RE.match(digits):
         raise ValidationError(f"{label} invalide (8 à 15 chiffres attendus).", details={"value": raw})
 
-    _validate_country_specific(raw, label=label)
+    _validate_country_specific(digits, label=label)
+    return "+" + digits
 
-    return int(raw)
 
 
 def phone_digits_to_str(phone: int | str, *, label: str = "numéro") -> str:
@@ -1427,7 +1429,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         print(f"ID attribué automatiquement : {client_id}")
                         name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
                         client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"
-                        client_real_phone = input("Numéro réel (ex: 33601020304) : ").strip() or "33601020304"
+                        client_real_phone = input("Numéro réel (ex: +33601020304) : ").strip() or "+33601020304"
                         assign_proxy_answer = (input("Attribuer un proxy maintenant ? [O/n] : ").strip().lower() or "o")
                         assign_proxy = not assign_proxy_answer.startswith("n")
                         args_client = argparse.Namespace(
