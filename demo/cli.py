@@ -15,6 +15,18 @@ from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
 
+# ✅ New: Rich + redaction logging for CLI
+from app.cli_logging import configure_cli_logging
+from app.validator import (
+    ValidationIssue,
+    int_strict,
+    phone_e164_strict,
+    email_strict,
+    name_strict,
+    iso_country_strict,
+    number_type_strict,
+)
+
 DEFAULT_NUMBER_TYPE = os.getenv("TWILIO_NUMBER_TYPE", "national").lower()
 
 # --- Optional deps (LIVE + TwiML) ---
@@ -65,70 +77,22 @@ class ConfigError(CLIError):
     exit_code = 2
 
 
-# =========================
-# Logging (square logs)
-# =========================
-class _ContextFilter(logging.Filter):
-    def __init__(self, ctx: dict[str, Any]):
-        super().__init__()
-        self.ctx = ctx
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        # Provide a stable field for formatting.
-        record.ctx = " ".join([f"{k}={v}" for k, v in self.ctx.items() if v is not None])
-        return True
-
-
-def setup_logging(level: str, *, json_logs: bool, ctx: dict[str, Any]) -> logging.Logger:
-    logger = logging.getLogger("proxycall.demo")
-    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-    logger.handlers.clear()
-    logger.propagate = False
-
-    h = logging.StreamHandler(sys.stdout)
-    h.setLevel(logger.level)
-
-    if json_logs:
-        # Minimal JSON logs without external deps
-        class JsonFormatter(logging.Formatter):
-            def format(self, record: logging.LogRecord) -> str:
-                payload = {
-                    "ts": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-                    "level": record.levelname,
-                    "logger": record.name,
-                    "msg": record.getMessage(),
-                    "ctx": getattr(record, "ctx", ""),
-                }
-                if record.exc_info:
-                    payload["exc"] = self.formatException(record.exc_info)
-                return json.dumps(payload, ensure_ascii=False)
-
-        h.setFormatter(JsonFormatter())
-    else:
-        # "Square" logs: [ts] [LEVEL] [logger] message | ctx=...
-        h.setFormatter(
-            logging.Formatter(
-                fmt="[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s | %(ctx)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-
-    logger.addHandler(h)
-    logger.addFilter(_ContextFilter(ctx))
-    return logger
+def v_or_raise(fn, *args, **kwargs):
+    """Wrap app.validator -> CLI ValidationError"""
+    try:
+        return fn(*args, **kwargs)
+    except ValidationIssue as e:
+        raise ValidationError(str(e), details={"field": e.field, "value": e.value}) from e
 
 
 # =========================
 # Console helpers
 # =========================
-ANSI_COLORS = {
-    "red": "\033[91m",
-    "reset": "\033[0m",
-}
+ANSI_COLORS = {"red": "\033[91m", "reset": "\033[0m"}
 
 
 def colorize(text: str, color: str) -> str:
-    if not sys.stdout.isatty():  # pas de couleur en sortie non interactive
+    if not sys.stdout.isatty():
         return text
     prefix = ANSI_COLORS.get(color, "")
     suffix = ANSI_COLORS["reset"] if prefix else ""
@@ -140,14 +104,11 @@ def colorize(text: str, color: str) -> str:
 # =========================
 PHONE_DIGITS_RE = re.compile(r"^[0-9]{8,15}$")  # 8 à 15 chiffres, sans signe +
 
-# Règles de validation spécifiques par indicatif : indicatif -> longueur du numéro local
-# (hors indicatif). Ces règles sont appliquées uniquement si l'indicatif est reconnu.
 COUNTRY_PHONE_RULES: dict[str, int] = {
-    "33": 9,   # France : 9 chiffres après l'indicatif (ex: 33 601020304)
-    "351": 9,  # Portugal : 9 chiffres après l'indicatif (ex: 351 609875678)
+    "33": 9,   # France
+    "351": 9,  # Portugal
 }
 
-# Exemples de formats attendus par indicatif pour des messages d'erreur plus clairs
 COUNTRY_PHONE_EXAMPLES: dict[str, str] = {
     "33": "33601020304",
     "351": "351609875678",
@@ -161,15 +122,13 @@ class DemoClient:
     client_id: int
     client_name: str
     client_mail: str
-    client_real_phone: int
-    client_proxy_number: Optional[int]
+    client_real_phone: str
+    client_proxy_number: Optional[str]
     client_iso_residency: str
     client_country_code: str
 
 
 def _detect_country_code(phone_digits: str) -> Optional[str]:
-    """Détecte l'indicatif en privilégiant le plus long préfixe connu."""
-
     matches = [cc for cc in COUNTRY_PHONE_RULES if phone_digits.startswith(cc)]
     if not matches:
         return None
@@ -197,45 +156,25 @@ def _validate_country_specific(phone_digits: str, *, label: str) -> None:
 
 
 def normalize_phone_digits(phone: str | int, *, label: str = "numéro") -> str:
-    raw = str(phone or "").strip().replace(" ", "")
-    if not raw:
-        raise ValidationError(f"{label} manquant.")
-
-    # accepte 00xx
-    if raw.startswith("00"):
-        raw = "+" + raw[2:]
-
-    # accepte 33... ou +33...
-    if raw.startswith("+"):
-        digits = raw[1:]
-    else:
-        digits = raw
-
-    if not PHONE_DIGITS_RE.match(digits):
-        raise ValidationError(f"{label} invalide (8 à 15 chiffres attendus).", details={"value": raw})
-
-    _validate_country_specific(digits, label=label)
-    return "+" + digits
-
+    # Strict E.164 only
+    return v_or_raise(phone_e164_strict, phone, field=label)
 
 
 def phone_digits_to_str(phone: int | str, *, label: str = "numéro") -> str:
-    return str(normalize_phone_digits(phone, label=label))
+    return normalize_phone_digits(phone, label=label)
 
 
 def phone_digits_to_e164(phone: int | str, *, label: str = "numéro") -> str:
-    digits = phone_digits_to_str(phone, label=label)
-    return "+" + digits
+    # déjà E.164
+    return normalize_phone_digits(phone, label=label)
 
 
 def extract_country_code_simple(phone: int | str) -> str:
-    """Renvoie l'indicatif pays basique (premiers chiffres)."""
-
     digits = phone_digits_to_str(phone)
-    detected = _detect_country_code(digits)
+    detected = _detect_country_code(digits.lstrip("+"))
     if detected:
         return detected
-    return digits[:2]
+    return digits.lstrip("+")[:2]
 
 
 # =========================
@@ -276,13 +215,11 @@ class ClientStore:
         raise NotImplementedError
 
     def max_client_id(self) -> int:
-        """Retourne le plus grand identifiant connu, ou 0 si aucun."""
-
         raise NotImplementedError
 
 
 class PoolStore:
-    def list_available(self, country_iso: str) -> list[dict[str, Any]]:
+    def list_available(self, country_iso: str, number_type: str | None = None) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def provision(
@@ -291,12 +228,22 @@ class PoolStore:
         raise NotImplementedError
 
     def assign_number(
-        self, country_iso: str, friendly_name: str, client_name: str, *, number_type: str = "mobile"
+        self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *, number_type: str = "mobile"
     ) -> str:
         raise NotImplementedError
 
     def sync_with_provider(
         self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    # ✅ NEW: webhook fix on pool numbers
+    def fix_voice_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -325,10 +272,7 @@ class MockJsonStore(ClientStore):
                 if parse_client_id(r.get("client_id")) == target:
                     real_phone = normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone")
                     proxy_raw = r.get("client_proxy_number", "")
-                    if proxy_raw is None or not str(proxy_raw).strip():
-                        proxy_number = None
-                    else:
-                        proxy_number = normalize_phone_digits(proxy_raw, label="client_proxy_number")
+                    proxy_number = normalize_phone_digits(proxy_raw, label="client_proxy_number") if str(proxy_raw).strip() else None
                     return DemoClient(
                         client_id=target,
                         client_name=str(r.get("client_name", "")),
@@ -350,7 +294,7 @@ class MockJsonStore(ClientStore):
         for r in self._load():
             try:
                 proxy_raw = r.get("client_proxy_number", "")
-                if proxy_raw is None or not str(proxy_raw).strip():
+                if not str(proxy_raw).strip():
                     continue
                 proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
             except ValidationError:
@@ -396,8 +340,6 @@ class MockJsonStore(ClientStore):
             "client_proxy_number": client.client_proxy_number if client.client_proxy_number is not None else "",
         }
 
-        # Ne jamais écrire/écraser les colonnes calculées ; on ne les copie que si
-        # elles existaient déjà dans le JSON pour préserver l'état antérieur.
         if preserved_iso is not None:
             new_row["client_iso_residency"] = preserved_iso
         if preserved_cc is not None:
@@ -412,11 +354,11 @@ class MockJsonStore(ClientStore):
             try:
                 proxy_val = None
                 proxy_raw = r.get("client_proxy_number", "")
-                if proxy_raw is not None and str(proxy_raw).strip():
+                if str(proxy_raw).strip():
                     proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
                 clients.append(
                     DemoClient(
-                        client_id=parse_client_id(r.get("client_id")),
+                        client_id=parse_client_id(r.get("client_id", 0)),
                         client_name=str(r.get("client_name", "")),
                         client_mail=str(r.get("client_mail", "")),
                         client_real_phone=normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone"),
@@ -442,14 +384,8 @@ class MockJsonStore(ClientStore):
 
 class MockPoolStore(PoolStore):
     PREFIXES = {
-        "mobile": {
-            "FR": "+337990",
-            "US": "+155520",
-        },
-        "local": {
-            "FR": "+331900",
-            "US": "+140820",
-        },
+        "mobile": {"FR": "+337990", "US": "+155520"},
+        "local": {"FR": "+331900", "US": "+140820"},
     }
 
     def __init__(self, path: Path, logger: logging.Logger, *, default_batch: int = 2):
@@ -496,9 +432,12 @@ class MockPoolStore(PoolStore):
         prefix = prefixes_for_type.get(country_iso.upper(), f"+999{number_type.upper()}{country_iso.upper()}")
         return f"{prefix}{index:05d}"
 
-    def list_available(self, country_iso: str) -> list[dict[str, Any]]:
+    def list_available(self, country_iso: str, number_type: str | None = None) -> list[dict[str, Any]]:
         country = country_iso.upper()
-        return [rec for rec in self._load() if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available"]
+        return [
+            rec for rec in self._load()
+            if rec.get("country_iso") == country and str(rec.get("status")).lower() == "available"
+        ]
 
     def provision(
         self,
@@ -531,16 +470,17 @@ class MockPoolStore(PoolStore):
             added.append(num)
 
         self._dump(rows)
-        self.logger.info("Pool mock approvisionné", extra={"country": country, "count": batch_size})
+        self.logger.info("[magenta]POOL[/magenta] mock provisioned country=%s added=%s", country, len(added))
         return added
 
     def assign_number(
-        self, country_iso: str, friendly_name: str, client_name: str, *, number_type: str = "mobile"
+        self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *, number_type: str = "mobile"
     ) -> str:
         country = country_iso.upper()
         rows = self._load()
         available_idx = None
         requested_type = (number_type or "mobile").lower()
+
         for idx, rec in enumerate(rows):
             if (
                 rec.get("country_iso") == country
@@ -558,19 +498,11 @@ class MockPoolStore(PoolStore):
                     and str(rec.get("number_type", "")).lower() == "local"
                 ):
                     available_idx = idx
-                    self.logger.info(
-                        "Aucun mobile mock disponible, basculement sur un numéro local.",
-                        extra={"country": country},
-                    )
+                    self.logger.info("[magenta]POOL[/magenta] mock fallback local country=%s", country)
                     break
 
         if available_idx is None:
-            self.provision(
-                country,
-                self.default_batch,
-                friendly_prefix=f"Pool-{country}",
-                number_type=requested_type,
-            )
+            self.provision(country, self.default_batch, friendly_prefix=f"Pool-{country}", number_type=requested_type)
             rows = self._load()
             for idx, rec in enumerate(rows):
                 if (
@@ -589,10 +521,7 @@ class MockPoolStore(PoolStore):
                     and str(rec.get("number_type", "")).lower() == "local"
                 ):
                     available_idx = idx
-                    self.logger.info(
-                        "Aucun mobile mock disponible après provision, basculement sur un numéro local.",
-                        extra={"country": country},
-                    )
+                    self.logger.info("[magenta]POOL[/magenta] mock fallback local after provision country=%s", country)
                     break
 
         if available_idx is None:
@@ -611,10 +540,17 @@ class MockPoolStore(PoolStore):
         self._dump(rows)
         return str(target.get("phone_number"))
 
-    def sync_with_provider(
-        self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None
-    ) -> dict[str, Any]:
+    def sync_with_provider(self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         raise ValidationError("Synchronisation disponible uniquement en mode LIVE.")
+
+    def fix_voice_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
+    ) -> dict[str, Any]:
+        raise ValidationError("Correction des webhooks disponible uniquement en mode LIVE.")
 
 
 class LivePoolStore(PoolStore):
@@ -622,53 +558,64 @@ class LivePoolStore(PoolStore):
         self.logger = logger
         self.default_batch = default_batch
 
-    def list_available(self, country_iso: str) -> list[dict[str, Any]]:
+    def list_available(self, country_iso: str, number_type: str | None = None) -> list[dict[str, Any]]:
+        from integrations.twilio_client import TwilioClient
+        return TwilioClient.list_available(country_iso.upper(), number_type=number_type)
+
+    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str, number_type: str = "mobile") -> list[str]:
+        """
+        ✅ IMPORTANT:
+        Retourne UNIQUEMENT les numéros achetés pendant CETTE exécution,
+        pas tout le pool disponible.
+        """
         from integrations.twilio_client import TwilioClient
 
-        return TwilioClient.list_available(country_iso.upper())
+        purchased_now = TwilioClient.fill_pool(country_iso.upper(), batch_size, number_type=number_type)
+        self.logger.info("[magenta]POOL[/magenta] live provisioned country=%s purchased_now=%s", country_iso.upper(), len(purchased_now))
+        return purchased_now
 
-    def provision(
-        self, country_iso: str, batch_size: int, *, friendly_prefix: str, number_type: str = "mobile"
-    ) -> list[str]:
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *, number_type: str = "mobile") -> str:
         from integrations.twilio_client import TwilioClient
-
-        TwilioClient.fill_pool(country_iso.upper(), batch_size, number_type=number_type)
-        self.logger.info("Pool Twilio approvisionné", extra={"country": country_iso, "count": batch_size})
-        refreshed = TwilioClient.list_available(country_iso.upper())
-        return [r.get("phone_number", "") for r in refreshed if str(r.get("status", "")).lower() == "available"]
-
-    def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *,
-                      number_type: str = "mobile") -> str:
-        from integrations.twilio_client import TwilioClient
-
-        return TwilioClient.buy_number_for_client(
-            friendly_name=friendly_name,
+        return TwilioClient.assign_number_from_pool(
             client_id=client_id,
             country=country_iso.upper(),
             attribution_to_client_name=client_name,
             number_type=number_type,
         )
 
-    def sync_with_provider(
-        self,
-        *,
-        apply: bool = True,
-        twilio_numbers: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
+    def sync_with_provider(self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         from integrations.twilio_client import TwilioClient
-
-        sync_result = TwilioClient.sync_twilio_numbers_with_sheet(
-            apply=apply, twilio_numbers=twilio_numbers
-        )
+        sync_result = TwilioClient.sync_twilio_numbers_with_sheet(apply=apply, twilio_numbers=twilio_numbers)
         self.logger.info(
-            "Synchronisation Twilio -> TwilioPools terminée",
-            extra={
-                "added": len(sync_result.get("added_numbers", [])),
-                "missing": len(sync_result.get("missing_numbers", [])),
-                "applied": apply,
-            },
+            "[magenta]POOL[/magenta] sync done added=%s missing=%s applied=%s",
+            len(sync_result.get("added_numbers", [])),
+            len(sync_result.get("missing_numbers", [])),
+            apply,
         )
         return sync_result
+
+    def fix_voice_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
+    ) -> dict[str, Any]:
+        from integrations.twilio_client import TwilioClient
+        result = TwilioClient.fix_pool_voice_webhooks(
+            dry_run=dry_run,
+            only_country=only_country,
+            only_status=only_status,
+        )
+        self.logger.info(
+            "[magenta]POOL[/magenta] fix_webhooks done checked=%s need_fix=%s fixed=%s dry_run=%s",
+            result.get("checked", 0),
+            len(result.get("need_fix", []) or []),
+            len(result.get("fixed", []) or []),
+            bool(result.get("dry_run", False)),
+        )
+        return result
+
 
 class SheetsStore(ClientStore):
     SCOPES = [
@@ -720,15 +667,12 @@ class SheetsStore(ClientStore):
             extra = [h for h in non_empty if h not in self.HEADERS]
             if extra or non_empty != self.HEADERS:
                 suffix = f" Colonnes supplémentaires détectées: {', '.join(extra)}." if extra else ""
-                self.logger.info(
-                    "En-têtes Sheets conservées (ordre différent ou colonnes supplémentaires détectées)." + suffix
-                )
+                self.logger.info("En-têtes Sheets conservées (ordre différent ou colonnes supplémentaires détectées)." + suffix)
         except Exception as e:
             raise ExternalServiceError("Erreur lecture/initialisation headers Sheets.") from e
 
     def _all_records(self) -> list[dict[str, Any]]:
         try:
-            # gspread returns list of dicts with headers
             return self.ws.get_all_records()
         except Exception as e:
             raise ExternalServiceError("Erreur lecture Sheets (get_all_records).") from e
@@ -740,10 +684,7 @@ class SheetsStore(ClientStore):
                 if parse_client_id(r.get("client_id", "")) == target:
                     real_phone = normalize_phone_digits(r.get("client_real_phone", ""), label="client_real_phone")
                     proxy_raw = r.get("client_proxy_number", "")
-                    if proxy_raw is None or not str(proxy_raw).strip():
-                        proxy_number = None
-                    else:
-                        proxy_number = normalize_phone_digits(proxy_raw, label="client_proxy_number")
+                    proxy_number = normalize_phone_digits(proxy_raw, label="client_proxy_number") if str(proxy_raw).strip() else None
                     return DemoClient(
                         client_id=target,
                         client_name=str(r.get("client_name", "")),
@@ -765,7 +706,7 @@ class SheetsStore(ClientStore):
         for r in self._all_records():
             try:
                 proxy_raw = r.get("client_proxy_number", "")
-                if proxy_raw is None or not str(proxy_raw).strip():
+                if not str(proxy_raw).strip():
                     continue
                 proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
             except ValidationError:
@@ -788,42 +729,21 @@ class SheetsStore(ClientStore):
         return None
 
     def save(self, client: DemoClient) -> None:
-        # Upsert sans jamais toucher aux colonnes calculées (ISO / country code).
         try:
             records = self._all_records()
-            # Need the row index: get_all_records excludes header; row index starts at 2
             for i, r in enumerate(records, start=2):
                 try:
                     cid = parse_client_id(r.get("client_id", ""))
                 except ValidationError:
                     continue
                 if cid == client.client_id:
-                    # Mise à jour uniquement des colonnes A à E.
                     self.ws.update(
                         f"A{i}:E{i}",
-                        [
-                            [
-                                client.client_id,
-                                client.client_name,
-                                client.client_mail,
-                                client.client_real_phone,
-                                client.client_proxy_number or "",
-                            ]
-                        ],
+                        [[client.client_id, client.client_name, client.client_mail, client.client_real_phone, client.client_proxy_number or ""]],
                     )
                     return
 
-            # Append uniquement sur les colonnes A à E ; les colonnes calculées sont
-            # laissées au Sheet (formules/auto-calculs).
-            self.ws.append_row(
-                [
-                    client.client_id,
-                    client.client_name,
-                    client.client_mail,
-                    client.client_real_phone,
-                    client.client_proxy_number or "",
-                ]
-            )
+            self.ws.append_row([client.client_id, client.client_name, client.client_mail, client.client_real_phone, client.client_proxy_number or ""])
         except Exception as e:
             raise ExternalServiceError("Erreur écriture Sheets (save).") from e
 
@@ -833,7 +753,7 @@ class SheetsStore(ClientStore):
             try:
                 proxy_val = None
                 proxy_raw = r.get("client_proxy_number", "")
-                if proxy_raw is not None and str(proxy_raw).strip():
+                if str(proxy_raw).strip():
                     proxy_val = normalize_phone_digits(proxy_raw, label="client_proxy_number")
                 clients.append(
                     DemoClient(
@@ -862,7 +782,7 @@ class SheetsStore(ClientStore):
 
 
 # =========================
-# Twilio (LIVE)
+# Twilio (LIVE) - direct buy (legacy demo path)
 # =========================
 def twilio_buy_number(*, account_sid: str, auth_token: str, country: str, voice_url: str, friendly_name: str) -> str:
     if TwilioRestClient is None:
@@ -873,11 +793,7 @@ def twilio_buy_number(*, account_sid: str, auth_token: str, country: str, voice_
         if not avail:
             raise ExternalServiceError(f"Aucun numéro local disponible pour le pays {country}.")
         phone_number = avail[0].phone_number
-        incoming = cli.incoming_phone_numbers.create(
-            phone_number=phone_number,
-            voice_url=voice_url,
-            friendly_name=friendly_name,
-        )
+        incoming = cli.incoming_phone_numbers.create(phone_number=phone_number, voice_url=voice_url, friendly_name=friendly_name)
         return incoming.phone_number
     except TwilioRestException as e:
         raise ExternalServiceError("Erreur Twilio (achat/config numéro).", details={"status": getattr(e, "status", None), "msg": str(e)}) from e
@@ -894,7 +810,6 @@ def ensure_env(var: str) -> str:
 
 
 def load_env_files() -> list[Path]:
-    """Charge les fichiers .env pour le mode LIVE (racine du repo + découverte)."""
     loaded: list[Path] = []
 
     repo_env = Path(__file__).resolve().parent.parent / ".env"
@@ -910,8 +825,7 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
-def make_proxy_mock(client_id: int, country_code: str) -> int:
-    # proxy stable et "réaliste" (mais fake) basé sur hash(client_id)
+def make_proxy_mock(client_id: int, country_code: str) -> str:
     h = hashlib.sha256(str(client_id).encode("utf-8")).hexdigest()
     digits = "".join([c for c in h if c.isdigit()])[:9].ljust(9, "0")
     proxy_digits = f"{country_code}{digits}"
@@ -919,38 +833,14 @@ def make_proxy_mock(client_id: int, country_code: str) -> int:
 
 
 def parse_client_id(value: str | int) -> int:
-    """Convertit un identifiant vers un entier.
-
-    Accepte des valeurs comme "7", "#7" ou "client-7" pour conserver la
-    robustesse par rapport aux données existantes, mais force un retour int.
-    """
-
-    if isinstance(value, int):
-        return value
-
-    raw = str(value or "").strip()
-    if not raw:
-        raise ValidationError("ID client manquant.")
-
-    m = re.search(r"(\d+)$", raw)
-    if not m:
-        raise ValidationError("ID client invalide: un entier est requis en suffixe.")
-
-    return int(m.group(1))
+    return v_or_raise(int_strict, value, field="client_id", min_value=1)
 
 
 def compute_next_client_id(store: ClientStore) -> int:
-    """Génère un nouvel ID client en incrémentant le dernier entier connu.
-
-    On s'appuie exclusivement sur la colonne ``client_id`` pour éviter qu'une
-    ligne partiellement invalide (ex: numéro mal formé) ne soit ignorée.
-    """
-
     try:
         max_num = store.max_client_id()
     except Exception:
         max_num = 0
-
     return max_num + 1
 
 
@@ -959,16 +849,16 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     raw_id = str(raw_id_val).strip() if raw_id_val is not None else ""
     if not raw_id:
         client_id = compute_next_client_id(store)
-        logger.info("ID attribué automatiquement.", extra={"client_id": client_id})
+        logger.info("[blue]CLI[/blue] auto client_id=%s", client_id)
     else:
         client_id = parse_client_id(raw_id_val)
 
     existing = store.get_by_id(client_id)
 
-    client_name = (args.name or (existing.client_name if existing else "")).strip()
+    client_name = v_or_raise(name_strict, (args.name or ""), field="client_name")
     if not client_name:
         raise ValidationError("--name requis.")
-    client_mail = (args.client_mail or (existing.client_mail if existing else "")).strip()
+    client_mail = v_or_raise(email_strict, (args.client_mail or ""), field="client_mail")
     if not client_mail:
         raise ValidationError("--client-mail requis.")
 
@@ -977,10 +867,6 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
 
     cc = extract_country_code_simple(client_real_phone)
 
-    # Les colonnes "client_iso_residency" et "client_country_code" sont désormais
-    # exclusivement calculées côté Google Sheets : on ne les renseigne jamais lors
-    # des créations/mises à jour, mais on préserve les valeurs déjà présentes si
-    # le store les expose (ex: champs calculés existants).
     iso_residency = existing.client_iso_residency if existing else ""
     country_code = existing.client_country_code if existing else ""
 
@@ -1018,12 +904,17 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
         client_iso_residency=iso_residency,
         client_country_code=country_code,
     )
+
+    _ = parse_client_id(client.client_id)
+    _ = v_or_raise(name_strict, client.client_name, field="client_name")
+    _ = v_or_raise(email_strict, client.client_mail, field="client_mail")
+    _ = normalize_phone_digits(client.client_real_phone, label="client_real_phone")
+    if client.client_proxy_number:
+        _ = normalize_phone_digits(client.client_proxy_number, label="client_proxy_number")
+
     store.save(client)
 
-    if existing:
-        logger.info("Client mis à jour (affiché ci-dessous).")
-    else:
-        logger.info("Client créé.")
+    logger.info("[green]CLI[/green] client %s", "updated" if existing else "created")
     print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
     return 0
 
@@ -1033,7 +924,7 @@ def do_lookup(args: argparse.Namespace, store: ClientStore, logger: logging.Logg
     client = store.get_by_proxy(proxy)
     if not client:
         raise NotFoundError("Aucun client trouvé pour ce proxy.", details={"proxy": proxy})
-    logger.info("Client trouvé.")
+    logger.info("[green]CLI[/green] client found")
     print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
     return 0
 
@@ -1050,14 +941,14 @@ def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: loggi
     expected_cc = client.client_country_code or extract_country_code_simple(client.client_real_phone)
 
     if expected_cc and caller_cc != expected_cc:
-        logger.warning("Routage refusé (country mismatch).")
+        logger.warning("[yellow]CLI[/yellow] routing refused (country mismatch)")
         print(twiml_block("Sorry, calls are only allowed from the same country."))
         return 0
 
-    logger.info("Routage autorisé (Dial vers phone_real).")
+    logger.info("[green]CLI[/green] routing allowed (Dial)")
     print(
         twiml_dial(
-            proxy_number=phone_digits_to_e164(client.client_proxy_number, label="proxy"),
+            proxy_number=phone_digits_to_e164(client.client_proxy_number or "", label="proxy"),
             real_number=phone_digits_to_e164(client.client_real_phone, label="client_real_phone"),
         )
     )
@@ -1065,13 +956,10 @@ def do_simulate_call(args: argparse.Namespace, store: ClientStore, logger: loggi
 
 
 def do_create_order(args: argparse.Namespace, store: ClientStore, logger: logging.Logger) -> int:
-    # Démo simple: "order" => garantit client + affiche proxy à communiquer
     order_id = (args.order_id or "").strip()
     if not order_id:
         raise ValidationError("--order-id requis.")
 
-    # On réutilise la création client (idempotente côté store).
-    # Si le client n'existe pas, on le crée.
     client_id = parse_client_id(args.client_id)
     args2 = argparse.Namespace(
         client_id=client_id,
@@ -1079,6 +967,7 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
         client_mail=args.client_mail,
         client_real_phone=args.client_real_phone,
         mode=args.mode,
+        assign_proxy=True,
     )
     do_create_client(args2, store, logger)
 
@@ -1086,20 +975,20 @@ def do_create_order(args: argparse.Namespace, store: ClientStore, logger: loggin
     if not client:
         raise ExternalServiceError("Création client échouée (client introuvable après save).")
 
-    logger.info("Commande créée (démo).")
-    out = {
-        "order_id": order_id,
-        "client_id": client.client_id,
-        "proxy_number_to_share": client.client_proxy_number,
-    }
+    logger.info("[green]CLI[/green] order created")
+    out = {"order_id": order_id, "client_id": client.client_id, "proxy_number_to_share": client.client_proxy_number}
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
 
 
 def do_pool_list(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
-    country = (args.country or "FR").upper()
-    rows = pool_store.list_available(country)
-    logger.info("Pool interrogé", extra={"country": country, "available": len(rows)})
+    country = v_or_raise(iso_country_strict, (args.country or "FR"), field="country_iso").upper()
+    number_type = str(getattr(args, "number_type", "all") or "all").lower()
+    if number_type != "all":
+        number_type = v_or_raise(number_type_strict, number_type, field="number_type")
+
+    rows = pool_store.list_available(country, number_type=None if number_type == "all" else number_type)
+    logger.info("[magenta]POOL[/magenta] list country=%s type=%s available=%s", country, number_type, len(rows))
     if not rows:
         print(f"Aucun numéro disponible pour {country}.")
         return 0
@@ -1111,26 +1000,21 @@ def do_pool_list(args: argparse.Namespace, pool_store: PoolStore, logger: loggin
 
 
 def do_pool_provision(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
-    country = (args.country or "FR").upper()
-    batch_size = max(1, int(args.batch_size or 1))
-    number_type = str(getattr(args, "number_type", "mobile") or "mobile").lower()
+    country = v_or_raise(iso_country_strict, (args.country or "FR"), field="country_iso").upper()
+    batch_size = v_or_raise(int_strict, (args.batch_size or 1), field="batch_size", min_value=1)
+    number_type = v_or_raise(number_type_strict, (getattr(args, "number_type", DEFAULT_NUMBER_TYPE) or DEFAULT_NUMBER_TYPE), field="number_type")
+
     try:
-        added = pool_store.provision(
-            country, batch_size, friendly_prefix=f"Pool-{country}", number_type=number_type
-        )
+        added = pool_store.provision(country, batch_size, friendly_prefix=f"Pool-{country}", number_type=number_type)
     except RuntimeError as exc:
         raise ExternalServiceError(str(exc)) from exc
-    logger.info("Approvisionnement terminé", extra={"country": country, "count": len(added)})
-    print(json.dumps({"country": country, "added": added}, indent=2, ensure_ascii=False))
+
+    logger.info("[magenta]POOL[/magenta] provision done country=%s purchased_now=%s", country, len(added))
+    print(json.dumps({"country": country, "purchased_now": added}, indent=2, ensure_ascii=False))
     return 0
 
 
-def do_pool_assign(
-    args: argparse.Namespace,
-    store: ClientStore,
-    pool_store: PoolStore,
-    logger: logging.Logger,
-) -> int:
+def do_pool_assign(args: argparse.Namespace, store: ClientStore, pool_store: PoolStore, logger: logging.Logger) -> int:
     client_id = parse_client_id(args.client_id)
     client = store.get_by_id(client_id)
     if not client:
@@ -1138,7 +1022,8 @@ def do_pool_assign(
     if client.client_proxy_number:
         raise ValidationError("Le client possède déjà un proxy.")
 
-    country = (client.client_iso_residency or client.client_country_code or os.getenv("TWILIO_PHONE_COUNTRY", "FR")).upper()
+    country_guess = client.client_iso_residency or client.client_country_code or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
+    country = v_or_raise(iso_country_strict, country_guess, field="country_iso").upper()
     friendly = f"Client-{client_id}" if not client.client_name else client.client_name
 
     auto_confirm = bool(getattr(args, "yes", False))
@@ -1163,21 +1048,24 @@ def do_pool_assign(
         )
         confirm = input("Confirmer l'attribution ? (o/N) : ").strip().lower()
         if confirm not in {"o", "oui", "y", "yes"}:
-            logger.info("Attribution annulée par l'utilisateur", extra={"client_id": client_id})
+            logger.info("[yellow]POOL[/yellow] assign cancelled client_id=%s", client_id)
             print("Attribution annulée.\n")
             return 0
 
-    number_type = str(getattr(args, "number_type", "mobile") or "mobile").lower()
-    proxy = pool_store.assign_number(
-        country,
-        friendly,
-        client.client_name,
-        client_id,
-        number_type=number_type)
+    number_type = v_or_raise(number_type_strict, (getattr(args, "number_type", DEFAULT_NUMBER_TYPE) or DEFAULT_NUMBER_TYPE), field="number_type")
+    proxy = pool_store.assign_number(country, friendly, client.client_name, client_id, number_type=number_type)
 
-    client.client_proxy_number = normalize_phone_digits(proxy, label="proxy")
+    client.client_proxy_number = normalize_phone_digits(proxy, label="client_proxy_number")
+
+    _ = parse_client_id(client.client_id)
+    _ = v_or_raise(name_strict, client.client_name, field="client_name")
+    _ = v_or_raise(email_strict, client.client_mail, field="client_mail")
+    _ = normalize_phone_digits(client.client_real_phone, label="client_real_phone")
+    _ = normalize_phone_digits(client.client_proxy_number, label="client_proxy_number")
+
     store.save(client)
-    logger.info("Proxy attribué depuis le pool", extra={"client_id": client_id, "proxy": proxy})
+
+    logger.info("[green]POOL[/green] assigned client_id=%s", client_id)
     print(json.dumps(dataclasses.asdict(client), indent=2, ensure_ascii=False))
     return 0
 
@@ -1200,45 +1088,93 @@ def do_pool_sync(args: argparse.Namespace, pool_store: PoolStore, logger: loggin
 
     if not missing_numbers:
         print("\nTous les numéros Twilio sont déjà présents dans TwilioPools.")
-        logger.info(
-            "Aucun numéro manquant côté TwilioPools",
-            extra={"missing": 0},
-        )
+        logger.info("[magenta]POOL[/magenta] sync preview missing=0")
         return 0
 
-    print(
-        f"\n{len(missing_numbers)} numéro(s) Twilio absent(s) de TwilioPools :"
-    )
+    print(f"\n{len(missing_numbers)} numéro(s) Twilio absent(s) de TwilioPools :")
     for num in missing_numbers:
         print(f"- {num}")
 
     auto_confirm = bool(getattr(args, "yes", False))
     if not auto_confirm:
-        confirm = input(
-            "Importer ces numéros manquants dans TwilioPools ? (o/N) : "
-        ).strip().lower()
+        confirm = input("Importer ces numéros manquants dans TwilioPools ? (o/N) : ").strip().lower()
         if confirm not in {"o", "oui", "y", "yes"}:
-            logger.info(
-                "Import des numéros manquants annulé par l'utilisateur",
-                extra={"missing": len(missing_numbers)},
-            )
+            logger.info("[yellow]POOL[/yellow] sync cancelled missing=%s", len(missing_numbers))
             print("Import annulé.\n")
             return 0
 
-    sync_result = pool_store.sync_with_provider(
-        apply=True, twilio_numbers=twilio_numbers
-    )
+    sync_result = pool_store.sync_with_provider(apply=True, twilio_numbers=twilio_numbers)
     added_numbers = sync_result.get("added_numbers", [])
 
-    print(
-        f"\n{len(added_numbers)} numéro(s) importé(s) dans TwilioPools :"
-    )
+    print(f"\n{len(added_numbers)} numéro(s) importé(s) dans TwilioPools :")
     for num in added_numbers:
         print(f"- {num}")
 
+    logger.info("[green]POOL[/green] sync applied added=%s", len(added_numbers))
+    return 0
+
+
+# ✅ NEW: fix webhooks action
+def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
+    dry_run = bool(getattr(args, "dry_run", True))
+    only_country = getattr(args, "country", None)
+    only_status = getattr(args, "status", None)
+
+    if only_country:
+        only_country = v_or_raise(iso_country_strict, only_country, field="country_iso").upper()
+
+    if only_status:
+        only_status = str(only_status).strip().lower()
+
+    result = pool_store.fix_voice_webhooks(
+        dry_run=dry_run,
+        only_country=only_country,
+        only_status=only_status,
+    )
+
+    checked = int(result.get("checked", 0) or 0)
+    need_fix = result.get("need_fix", []) or []
+    fixed = result.get("fixed", []) or []
+    not_found = result.get("not_found_on_twilio", []) or []
+    errors = result.get("errors", []) or []
+
+    print("\n--- Pool webhook fix report ---")
+    print(f"dry_run              : {bool(result.get('dry_run', False))}")
+    print(f"target_voice_url     : {result.get('target_voice_url', '')}")
+    print(f"checked              : {checked}")
+    print(f"need_fix             : {len(need_fix)}")
+    print(f"fixed                : {len(fixed)}")
+    print(f"not_found_on_twilio  : {len(not_found)}")
+    print(f"errors               : {len(errors)}")
+
+    # Affichage détails (léger)
+    if need_fix:
+        print("\nNuméros à corriger (aperçu):")
+        for x in need_fix[:20]:
+            print(f"- {x.get('phone_number')} (current={x.get('current_voice_url','')})")
+        if len(need_fix) > 20:
+            print(f"... +{len(need_fix) - 20} autres")
+
+    if not_found:
+        print("\nNuméros introuvables côté Twilio (aperçu):")
+        for n in not_found[:20]:
+            print(f"- {n}")
+        if len(not_found) > 20:
+            print(f"... +{len(not_found) - 20} autres")
+
+    if errors:
+        print("\nErreurs (aperçu):")
+        for e in errors[:20]:
+            print(f"- {e.get('phone_number','')} err={e.get('err','')}")
+        if len(errors) > 20:
+            print(f"... +{len(errors) - 20} autres")
+
     logger.info(
-        "Synchronisation TwilioPools réalisée",
-        extra={"added": len(added_numbers)},
+        "[magenta]POOL[/magenta] fix_webhooks report checked=%s need_fix=%s fixed=%s dry_run=%s",
+        checked,
+        len(need_fix),
+        len(fixed),
+        dry_run,
     )
     return 0
 
@@ -1249,7 +1185,6 @@ def do_pool_sync(args: argparse.Namespace, pool_store: PoolStore, logger: loggin
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="proxycall-demo", description="ProxyCall DEMO CLI (mock/live)")
     p.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="DEBUG, INFO, WARNING, ERROR")
-    p.add_argument("--json-logs", action="store_true", help="Logs JSON (utile pour ingestion).")
     p.add_argument("--verbose", action="store_true", help="Affiche les stack traces en cas d’erreur.")
     p.add_argument(
         "--fixtures",
@@ -1270,7 +1205,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = p.add_subparsers(dest="cmd", required=False)
 
-    c1 = sp.add_parser("create-client", help="Crée (ou affiche si existe) un client + proxy.")
+    c1 = sp.add_parser("create-client", help="Crée (ou met à jour) un client + proxy.")
     c1.add_argument("--client-id", required=False, help="Laisser vide pour auto-incrémenter.")
     c1.add_argument("--name", required=True)
     c1.add_argument("--client-mail", required=True)
@@ -1291,81 +1226,69 @@ def build_parser() -> argparse.ArgumentParser:
     c4.add_argument("--client-mail", required=True)
     c4.add_argument("--client-real-phone", required=True)
 
-    c5 = sp.add_parser(
-        "pool-list",
-        help="Liste les numéros disponibles dans le pool (par pays).",
-    )
+    c5 = sp.add_parser("pool-list", help="Liste les numéros disponibles dans le pool (par pays).")
     c5.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
+    c5.add_argument("--number-type", default="all", help="all | mobile | local | national")
 
-    c6 = sp.add_parser(
-        "pool-provision",
-        help="Approvisionne le pool en achetant des numéros (mock ou live).",
-    )
+    c6 = sp.add_parser("pool-provision", help="Approvisionne le pool (mock ou live).")
     c6.add_argument("--country", default=os.getenv("TWILIO_PHONE_COUNTRY", "FR"))
     c6.add_argument("--batch-size", type=int, default=int(os.getenv("TWILIO_POOL_SIZE", "2")))
     c6.add_argument(
         "--number-type",
         choices=["national", "local", "mobile"],
         default=DEFAULT_NUMBER_TYPE,
-        help="Type de numéro à acheter (mobile par défaut, local sinon).",
+        help="Type de numéro à acheter.",
     )
 
-    c7 = sp.add_parser(
-        "pool-assign",
-        help="Attribue un numéro du pool à un client existant (et met à jour sa fiche).",
-    )
+    c7 = sp.add_parser("pool-assign", help="Attribue un numéro du pool à un client existant.")
     c7.add_argument("--client-id", required=True)
     c7.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation interactive.")
     c7.add_argument(
         "--number-type",
         choices=["national", "local", "mobile"],
         default=DEFAULT_NUMBER_TYPE,
-        help="Type de numéro à attribuer (mobile par défaut, local sinon).",
+        help="Type de numéro à attribuer.",
     )
 
-    c8 = sp.add_parser(
-        "pool-sync",
-        help="Affiche les numéros Twilio et ajoute les manquants dans TwilioPools.",
-    )
+    c8 = sp.add_parser("pool-sync", help="Ajoute les numéros Twilio manquants dans TwilioPools.")
     c8.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation avant import.")
+
+    # ✅ NEW command: pool-fix-webhooks
+    c9 = sp.add_parser("pool-fix-webhooks", help="Corrige voice_url sur les numéros Twilio listés dans TwilioPools.")
+    c9.add_argument("--country", required=False, help="Filtrer par pays ISO (ex: FR).")
+    c9.add_argument("--status", required=False, help="Filtrer par status (ex: available/assigned).")
+    c9.add_argument("--apply", action="store_true", help="Appliquer les updates (sinon dry-run).")
 
     return p
 
 
 def select_mode(args: argparse.Namespace) -> str:
-    try:
-        if args.live:
-            return "live"
-        if args.mock:
+    if args.live:
+        return "live"
+    if args.mock:
+        return "mock"
+
+    print("Bienvenue ! Choisis le mode de démonstration :")
+    print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
+    print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
+
+    while True:
+        user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
+        if user_choice == "1":
             return "mock"
-
-        print("Bienvenue ! Choisis le mode de démonstration :")
-        print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
-        print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
-
-        while True:
-            user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
-            if user_choice == "1":
-                return "mock"
-            if user_choice == "2":
-                return "live"
-            print("Merci de répondre par 1 ou 2.")
-    except Exception as exc:  # pragma: no cover - interaction console
-        LOGGER.exception("Échec lors du choix de mode interactif: %s", exc)
-        raise
+        if user_choice == "2":
+            return "live"
+        print("Merci de répondre par 1 ou 2.")
 
 
 def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
     if mode == "mock":
         return MockJsonStore(Path(args.fixtures), logger=logger)
 
-    # LIVE: requires Sheets config
     sheet_name = ensure_env("GOOGLE_SHEET_NAME")
     sa_env = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
     sa_file = Path(sa_env).expanduser()
 
-    # Si le chemin est relatif, on l'interprète depuis la racine du dépôt pour les utilisateurs
-    # qui lancent le script ailleurs (ex: PyCharm). Cela évite l'erreur "Fichier introuvable".
     if not sa_file.is_absolute():
         repo_root = Path(__file__).resolve().parent.parent
         candidate = repo_root / sa_file
@@ -1373,14 +1296,9 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
             sa_file = candidate
 
     sa_file = sa_file.resolve()
-
     worksheet = os.getenv("GOOGLE_CLIENTS_WORKSHEET", "Clients")
-    return SheetsStore(
-        sheet_name=sheet_name,
-        service_account_file=str(sa_file),
-        worksheet=worksheet,
-        logger=logger,
-    )
+
+    return SheetsStore(sheet_name=sheet_name, service_account_file=str(sa_file), worksheet=worksheet, logger=logger)
 
 
 def make_pool_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> PoolStore:
@@ -1393,10 +1311,7 @@ def make_pool_store(mode: str, args: argparse.Namespace, logger: logging.Logger)
 def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: PoolStore, logger: logging.Logger) -> int:
     try:
         print("\n=== ProxyCall DEMO ===")
-        print(
-            "Répondez simplement par le numéro du menu. Tapez 0 pour quitter."
-            "\nLes valeurs par défaut sont préremplies pour aller vite.\n"
-        )
+        print("Répondez par le numéro du menu. Tapez 0 pour quitter.\n")
         print(f"Mode sélectionné : {args.mode.upper()}\n")
 
         while True:
@@ -1410,12 +1325,11 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
             choice = input("Votre sélection : ").strip() or "0"
 
             if choice == "0":
-                logger.info("Fin de la démo interactive.")
+                logger.info("[blue]CLI[/blue] end interactive")
                 print("Au revoir !")
                 return 0
 
             if choice == "1":
-                logger.info("Menu 1: gestion client (créer/rechercher).")
                 while True:
                     print("\nGestion client :")
                     print("  1) Créer un client (saisie guidée)")
@@ -1435,6 +1349,16 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         client_real_phone = input("Numéro réel (ex: +33601020304) : ").strip() or "+33601020304"
                         assign_proxy_answer = (input("Attribuer un proxy maintenant ? [O/n] : ").strip().lower() or "o")
                         assign_proxy = not assign_proxy_answer.startswith("n")
+
+                        try:
+                            name = v_or_raise(name_strict, name, field="client_name")
+                            client_mail = v_or_raise(email_strict, client_mail, field="client_mail")
+                            client_real_phone = normalize_phone_digits(client_real_phone, label="client_real_phone")
+                        except ValidationError as exc:
+                            logger.error("Validation input (create client menu): %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
+                            continue
+
                         args_client = argparse.Namespace(
                             client_id=client_id,
                             name=name,
@@ -1447,8 +1371,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             do_create_client(args_client, store, logger)
                         except CLIError as exc:
                             logger.error("Erreur création client: %s", exc)
-                            msg = f"\n❌ Impossible de créer le client : {exc}\n"
-                            print(colorize(msg, "red"))
+                            print(colorize(f"\n❌ Impossible de créer le client : {exc}\n", "red"))
                         continue
 
                     if sub_choice == "2":
@@ -1456,6 +1379,8 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         print("  1) ID client")
                         print("  2) Numéro proxy")
                         lookup_choice = input("Votre sélection (1 par défaut) : ").strip() or "1"
+
+                        found = None
                         if lookup_choice == "1":
                             client_id_raw = input("ID client (ex: 1) : ").strip()
                             if not client_id_raw:
@@ -1467,8 +1392,9 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                                 logger.error("ID invalide: %s", exc)
                                 continue
                             found = store.get_by_id(client_id_val)
+
                         elif lookup_choice == "2":
-                            proxy = input("Numéro proxy (ex: 33900000000) : ").strip()
+                            proxy = input("Numéro proxy (ex: +33900000000) : ").strip()
                             try:
                                 proxy_norm = normalize_phone_digits(proxy, label="proxy")
                             except CLIError as exc:
@@ -1484,7 +1410,6 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             print("Aucun client correspondant.")
                             continue
 
-                        logger.info("Client trouvé (affiché ci-dessous).")
                         print(json.dumps(dataclasses.asdict(found), indent=2, ensure_ascii=False))
                         continue
 
@@ -1495,25 +1420,20 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             continue
                         try:
                             client_id_val = parse_client_id(client_id)
-                        except CLIError as exc:
+                        except ValidationError as exc:
                             logger.error("ID invalide: %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
                             continue
+
                         existing = store.get_by_id(client_id_val)
                         if not existing:
-                            logger.warning("Client introuvable pour attribution proxy.")
                             print("Aucun client correspondant.\n")
                             continue
                         if existing.client_proxy_number:
-                            logger.info("Proxy déjà attribué, rien à faire.")
                             print("Ce client possède déjà un proxy.\n")
                             continue
 
-                        args_pool = argparse.Namespace(
-                            client_id=str(existing.client_id),
-                            yes=False,  # demande confirmation (comme avant)
-                            number_type=DEFAULT_NUMBER_TYPE,
-                        )
-
+                        args_pool = argparse.Namespace(client_id=str(existing.client_id), yes=False, number_type=DEFAULT_NUMBER_TYPE)
                         try:
                             do_pool_assign(args_pool, store, pool_store, logger)
                         except CLIError as exc:
@@ -1524,35 +1444,31 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                 continue
 
             if choice == "2":
-                logger.info("Menu 2: simulation appel autorisé.")
-                from_number = input("Numéro appelant (même pays, ex: 33111111111) : ").strip() or "33111111111"
-                to_number = input("Numéro proxy appelé (ex: 33900000000) : ").strip() or "33900000000"
-                args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
+                from_number = input("Numéro appelant (même pays, ex: +33111111111) : ").strip() or "+33111111111"
+                to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
                 try:
-                    do_simulate_call(args_call, store, logger)
+                    do_simulate_call(argparse.Namespace(from_number=from_number, to_number=to_number), store, logger)
                 except CLIError as exc:
                     logger.error("Erreur simulation appel autorisé: %s", exc)
                 continue
 
             if choice == "3":
-                logger.info("Menu 3: simulation appel bloqué.")
-                from_number = input("Numéro appelant (autre pays, ex: 442222222222) : ").strip() or "442222222222"
-                to_number = input("Numéro proxy appelé (ex: 33900000000) : ").strip() or "33900000000"
-                args_call = argparse.Namespace(from_number=from_number, to_number=to_number)
+                from_number = input("Numéro appelant (autre pays, ex: +442222222222) : ").strip() or "+442222222222"
+                to_number = input("Numéro proxy appelé (ex: +33900000000) : ").strip() or "+33900000000"
                 try:
-                    do_simulate_call(args_call, store, logger)
+                    do_simulate_call(argparse.Namespace(from_number=from_number, to_number=to_number), store, logger)
                 except CLIError as exc:
                     logger.error("Erreur simulation appel bloqué: %s", exc)
                 continue
 
             if choice == "4":
-                logger.info("Menu 4: gestion du pool.")
                 while True:
                     print("\nPool de numéros :")
                     print("  1) Lister les numéros disponibles par pays")
                     print("  2) Approvisionner le pool")
                     print("  3) Attribuer un numéro du pool à un client")
                     print("  4) Vérifier et compléter TwilioPools avec les numéros Twilio")
+                    print("  5) Fixer voice_url (webhook) sur les numéros du pool (LIVE)")
                     print("  0) Retour au menu principal")
                     pool_choice = input("Votre sélection : ").strip() or "0"
 
@@ -1561,9 +1477,9 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
 
                     if pool_choice == "1":
                         country = input("Pays ISO (ex: FR) : ").strip() or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
-                        args_pool = argparse.Namespace(country=country)
+                        nt = input("Type (all/mobile/local/national) [all] : ").strip().lower() or "all"
                         try:
-                            do_pool_list(args_pool, pool_store, logger)
+                            do_pool_list(argparse.Namespace(country=country, number_type=nt), pool_store, logger)
                         except CLIError as exc:
                             logger.error("Erreur listing pool: %s", exc)
                         continue
@@ -1571,16 +1487,15 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                     if pool_choice == "2":
                         country = input("Pays ISO (ex: FR) : ").strip() or os.getenv("TWILIO_PHONE_COUNTRY", "FR")
                         batch_raw = input("Combien de numéros acheter ? (2 par défaut) : ").strip() or "2"
+                        number_type = input("Type (mobile/local/national) [national] : ").strip().lower() or DEFAULT_NUMBER_TYPE
                         try:
                             batch_size = int(batch_raw)
-                        except ValueError:
-                            print("Merci d'indiquer un entier.\n")
+                            number_type = v_or_raise(number_type_strict, number_type, field="number_type")
+                        except (ValueError, ValidationError) as exc:
+                            print(colorize(f"\n❌ {exc}\n", "red"))
                             continue
-                        args_pool = argparse.Namespace(
-                            country=country,
-                            batch_size=batch_size,
-                            number_type=DEFAULT_NUMBER_TYPE,
-                        )
+
+                        args_pool = argparse.Namespace(country=country, batch_size=batch_size, number_type=number_type)
                         try:
                             do_pool_provision(args_pool, pool_store, logger)
                         except CLIError as exc:
@@ -1593,11 +1508,15 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         if not client_raw:
                             print("Merci de renseigner un ID client.\n")
                             continue
-                        args_pool = argparse.Namespace(
-                            client_id=client_raw, yes=False, number_type=DEFAULT_NUMBER_TYPE
-                        )
+                        number_type = input("Type (mobile/local/national) [national] : ").strip().lower() or DEFAULT_NUMBER_TYPE
                         try:
-                            do_pool_assign(args_pool, store, pool_store, logger)
+                            number_type = v_or_raise(number_type_strict, number_type, field="number_type")
+                        except ValidationError as exc:
+                            print(colorize(f"\n❌ {exc}\n", "red"))
+                            continue
+
+                        try:
+                            do_pool_assign(argparse.Namespace(client_id=client_raw, yes=False, number_type=number_type), store, pool_store, logger)
                         except CLIError as exc:
                             logger.error("Erreur attribution pool: %s", exc)
                         continue
@@ -1609,12 +1528,37 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             logger.error("Erreur synchronisation pool: %s", exc)
                         continue
 
-                    print("Merci de choisir 0, 1, 2, 3 ou 4.\n")
+                    if pool_choice == "5":
+                        if args.mode != "live":
+                            print("Cette action est disponible uniquement en mode LIVE.\n")
+                            continue
+
+                        country = input("Filtrer par pays ISO (ex: FR) [vide=all] : ").strip().upper() or ""
+                        status = input("Filtrer par status (available/assigned) [vide=all] : ").strip().lower() or ""
+                        apply = (input("Appliquer les updates ? (o/N) : ").strip().lower() or "n") in {"o", "oui", "y", "yes"}
+
+                        try:
+                            do_pool_fix_webhooks(
+                                argparse.Namespace(
+                                    country=country or None,
+                                    status=status or None,
+                                    dry_run=(not apply),
+                                ),
+                                pool_store,
+                                logger,
+                            )
+                        except CLIError as exc:
+                            logger.error("Erreur fix webhooks: %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
+                        continue
+
+                    print("Merci de choisir 0, 1, 2, 3, 4 ou 5.\n")
                 continue
 
             logger.warning("Choix inconnu: %s", choice)
             print("Veuillez choisir 0, 1, 2, 3 ou 4.\n")
-    except Exception as exc:  # pragma: no cover - boucle interactive
+
+    except Exception as exc:  # pragma: no cover
         logger.exception("Erreur inattendue dans le menu interactif: %s", exc)
         return 4
 
@@ -1623,56 +1567,30 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    loaded_env_files = load_env_files()
+    load_env_files()
 
     mode = select_mode(args)
-    ctx = {"mode": mode, "cmd": args.cmd or "menu"}
+    args.mode = mode
 
-    logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
-
-    if loaded_env_files:
-        logger.debug("Fichiers .env chargés: %s", ", ".join(str(p) for p in loaded_env_files))
+    # ✅ New: Rich logging config (color + redaction). Verbose => DEBUG.
+    configure_cli_logging(verbose=bool(args.verbose or str(args.log_level).upper() == "DEBUG"))
+    logger = logging.getLogger(__name__)
 
     try:
-        try:
-            store = make_store(mode, args, logger)
-            pool_store = make_pool_store(mode, args, logger)
-        except ConfigError as exc:
-            logger.error(str(exc))
-            if args.cmd is None and mode == "live":
-                print(
-                    "\nLe mode LIVE n'est pas prêt (variables d'environnement manquantes)."
-                    "\nVoulez-vous basculer en mode simulé (MOCK) ? [O/n]",
-                    end=" ",
-                )
-                answer = (input().strip().lower() or "o") if sys.stdin.isatty() else "o"
-                if answer.startswith("o"):
-                    mode = "mock"
-                    args.mode = mode
-                    ctx = {"mode": mode, "cmd": args.cmd or "menu"}
-                    logger = setup_logging(args.log_level, json_logs=args.json_logs, ctx=ctx)
-                    store = make_store(mode, args, logger)
-                    pool_store = make_pool_store(mode, args, logger)
-                else:
-                    return exc.exit_code
-            else:
-                return exc.exit_code
-
-        args.mode = mode
+        store = make_store(mode, args, logger)
+        pool_store = make_pool_store(mode, args, logger)
 
         if args.cmd is None:
             return interactive_menu(args, store, pool_store, logger)
 
         if args.cmd == "create-client":
             args.assign_proxy = not args.no_proxy
-            args.mode = mode
             return do_create_client(args, store, logger)
         if args.cmd == "lookup":
             return do_lookup(args, store, logger)
         if args.cmd == "simulate-call":
             return do_simulate_call(args, store, logger)
         if args.cmd == "create-order":
-            args.mode = mode
             return do_create_order(args, store, logger)
         if args.cmd == "pool-list":
             return do_pool_list(args, pool_store, logger)
@@ -1682,17 +1600,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             return do_pool_assign(args, store, pool_store, logger)
         if args.cmd == "pool-sync":
             return do_pool_sync(args, pool_store, logger)
+        if args.cmd == "pool-fix-webhooks":
+            args.dry_run = not bool(getattr(args, "apply", False))
+            return do_pool_fix_webhooks(args, pool_store, logger)
 
         raise ValidationError("Commande inconnue.")
+
     except CLIError as e:
-        logger.error(str(e))
+        logger.error("%s", str(e))
         if args.verbose and e.__cause__ is not None:
             logger.exception("Détails exception:", exc_info=e.__cause__)
         if getattr(e, "details", None):
             logger.error("Details=%s", json.dumps(e.details, ensure_ascii=False))
         return e.exit_code
     except Exception as e:
-        # Catch-all unexpected errors
         logger.exception("Erreur inattendue: %s", str(e))
         return 4
 
