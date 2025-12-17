@@ -6,7 +6,7 @@ services:
     plan: pro
     region: frankfurt
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    startCommand: "python -m app.run"
     envVars:
       - key: PUBLIC_BASE_URL
         sync: false  # à renseigner dans le dashboard (Render fournit RENDER_EXTERNAL_URL)
