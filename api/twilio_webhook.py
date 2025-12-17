@@ -67,7 +67,20 @@ async def twilio_sms_webhook(request: Request):
         mask_phone(to_number),
     )
 
-    twiml = MessageRoutingService.handle_incoming_sms(
-        proxy_number=to_number, sender_number=from_number, body=body
-    )
-    return Response(content=twiml, media_type="text/xml")
+    try:
+        twiml = MessageRoutingService.handle_incoming_sms(
+            proxy_number=to_number, sender_number=from_number, body=body
+        )
+        return Response(content=twiml, media_type="text/xml")
+    except Exception as exc:  # pragma: no cover - dépendances externes
+        logger.exception(
+            "Erreur lors du traitement du webhook SMS Twilio",
+            exc_info=exc,
+            extra={
+                "from": mask_phone(from_number),
+                "to": mask_phone(to_number),
+                "body_preview": (body[:80] + "..." if len(body) > 80 else body),
+            },
+        )
+        fallback = "<Response><Message>Service SMS temporairement indisponible.</Message></Response>"
+        return Response(content=fallback, media_type="text/xml", status_code=500)
