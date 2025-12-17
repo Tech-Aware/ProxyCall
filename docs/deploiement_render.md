@@ -23,8 +23,9 @@ Pour déployer :
 1. Copiez `.env.render.example` en `.env.render` et complétez :
    - `PUBLIC_BASE_URL` : URL Render publique (ex. `https://proxycall.onrender.com`).
    - `PROXYCALL_API_TOKEN` : si vous protégez l'API par un header ou une auth personnalisée.
-2. La CLI charge automatiquement `.env.render` puis `.env`, avec redaction des logs (Rich) et messages d'erreur détaillés.
-3. Les secrets Twilio/Google restent sur Render : la CLI n'en a pas besoin pour appeler les endpoints.
+2. Lancez la CLI en mode Render : `python cli.py --render create-client ...` ou `python cli.py --render pool-list ...`. Le flag `--render` force l'usage d'un client HTTP (`httpx`) configuré avec l'URL/token ci-dessus.
+3. La CLI charge automatiquement `.env.render` puis `.env`, avec redaction des logs (Rich) et messages d'erreur détaillés. Les erreurs réseau/HTTP sont remontées avec le code status et le détail JSON renvoyé par l'API Render.
+4. Les secrets Twilio/Google restent sur Render : la CLI n'en a pas besoin pour appeler les endpoints.
 
 ## 4. Sécurité et bonnes pratiques
 - Ne commitez jamais les secrets : utilisez le dashboard Render pour les variables et secret files.

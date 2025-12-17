@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
+import httpx
 
 # ✅ New: Rich + redaction logging for CLI
 from app.cli_logging import configure_cli_logging
@@ -246,6 +247,105 @@ class PoolStore:
         only_status: str | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+
+class RenderAPIClient:
+    def __init__(self, base_url: str, token: str | None, logger: logging.Logger):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.logger = logger
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    def _request(self, method: str, path: str, *, params: dict[str, Any] | None = None, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        try:
+            resp = httpx.request(
+                method,
+                url,
+                params=params,
+                json=json_body,
+                headers=self._headers(),
+                timeout=20,
+            )
+        except Exception as exc:  # pragma: no cover - réseau
+            self.logger.error("[red]RENDER[/red] appel %s %s échoué: %s", method, url, exc)
+            raise ExternalServiceError("Appel Render impossible (réseau)", details={"url": url}) from exc
+
+        if resp.status_code >= 400:
+            detail = resp.text
+            try:
+                detail_json = resp.json()
+                detail = detail_json.get("detail", detail)
+            except Exception:
+                detail_json = None
+            self.logger.error(
+                "[red]RENDER[/red] %s %s -> %s : %s", method, url, resp.status_code, detail
+            )
+            raise ExternalServiceError(
+                f"API Render renvoie {resp.status_code}",
+                details={"url": url, "status": resp.status_code, "detail": detail_json or detail},
+            )
+
+        try:
+            return resp.json()
+        except Exception as exc:  # pragma: no cover
+            raise ExternalServiceError("Réponse Render invalide (JSON)", details={"url": url}) from exc
+
+    # --- Clients ---
+    def create_client(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/clients", json_body=payload)
+
+    def get_client(self, client_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/clients/{client_id}")
+
+    def get_client_by_proxy(self, proxy: str) -> dict[str, Any]:
+        return self._request("GET", f"/clients/by-proxy/{proxy}")
+
+    # --- Orders ---
+    def create_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/orders", json_body=payload)
+
+    # --- Pool ---
+    def pool_available(self, country_iso: str, number_type: str | None) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/pool/available",
+            params={"country_iso": country_iso, "number_type": number_type},
+        )
+
+    def pool_provision(self, country_iso: str, batch_size: int, number_type: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/pool/provision",
+            json_body={"country_iso": country_iso, "batch_size": batch_size, "number_type": number_type},
+        )
+
+    def pool_assign(self, client_id: int, country_iso: str, client_name: str, number_type: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/pool/assign",
+            json_body={
+                "client_id": client_id,
+                "country_iso": country_iso,
+                "client_name": client_name,
+                "number_type": number_type,
+            },
+        )
+
+    def pool_sync(self, apply: bool = True) -> dict[str, Any]:
+        return self._request("POST", "/pool/sync", json_body={"apply": apply})
+
+    def pool_fix_webhooks(self, *, dry_run: bool = True, only_country: str | None = None, only_status: str | None = None) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/pool/fix-webhooks",
+            json_body={"dry_run": dry_run, "only_country": only_country, "only_status": only_status},
+        )
 
 
 class MockJsonStore(ClientStore):
@@ -617,6 +717,106 @@ class LivePoolStore(PoolStore):
         return result
 
 
+class RenderClientStore(ClientStore):
+    def __init__(self, api: RenderAPIClient, logger: logging.Logger):
+        self.api = api
+        self.logger = logger
+        self._cache: dict[str, DemoClient] = {}
+
+    @staticmethod
+    def _to_demo_client(payload: dict[str, Any]) -> DemoClient:
+        return DemoClient(
+            client_id=parse_client_id(payload.get("client_id")),
+            client_name=str(payload.get("client_name", "")),
+            client_mail=str(payload.get("client_mail", "")),
+            client_real_phone=normalize_phone_digits(payload.get("client_real_phone", ""), label="client_real_phone"),
+            client_proxy_number=normalize_phone_digits(payload.get("client_proxy_number", ""), label="client_proxy_number") if payload.get("client_proxy_number") else None,
+            client_iso_residency=str(payload.get("client_iso_residency", "")),
+            client_country_code=str(payload.get("client_country_code", "")),
+        )
+
+    def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
+        cid = str(parse_client_id(client_id))
+        if cid in self._cache:
+            return self._cache[cid]
+        data = self.api.get_client(cid)
+        client = self._to_demo_client(data)
+        self._cache[cid] = client
+        return client
+
+    def get_by_proxy(self, proxy_number: str | int) -> Optional[DemoClient]:
+        proxy = normalize_phone_digits(proxy_number, label="proxy")
+        data = self.api.get_client_by_proxy(proxy)
+        client = self._to_demo_client(data)
+        self._cache[str(client.client_id)] = client
+        return client
+
+    def save(self, client: DemoClient) -> None:
+        payload = {
+            "client_id": str(client.client_id),
+            "client_name": client.client_name,
+            "client_mail": client.client_mail,
+            "client_real_phone": client.client_real_phone,
+            "client_iso_residency": client.client_iso_residency,
+        }
+        data = self.api.create_client(payload)
+        new_client = self._to_demo_client({**payload, **data})
+        self._cache[str(new_client.client_id)] = new_client
+
+    def list_all(self) -> list[DemoClient]:
+        raise ExternalServiceError("Listing complet non exposé par l'API Render")
+
+    def max_client_id(self) -> int:
+        raise ExternalServiceError("max_client_id indisponible en mode Render")
+
+
+class RenderPoolStore(PoolStore):
+    def __init__(self, api: RenderAPIClient, logger: logging.Logger):
+        self.api = api
+        self.logger = logger
+
+    def list_available(self, country_iso: str, number_type: str | None = None) -> list[dict[str, Any]]:
+        data = self.api.pool_available(country_iso, number_type)
+        available = data.get("available", []) if isinstance(data, dict) else []
+        self.logger.info(
+            "[magenta]POOL[/magenta] render available country=%s type=%s count=%s",
+            country_iso,
+            number_type or "all",
+            len(available),
+        )
+        return available
+
+    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str, number_type: str = "mobile") -> list[str]:
+        data = self.api.pool_provision(country_iso, batch_size, number_type)
+        purchased = data.get("purchased_now", []) if isinstance(data, dict) else []
+        self.logger.info(
+            "[magenta]POOL[/magenta] render provision country=%s type=%s purchased=%s",
+            country_iso,
+            number_type,
+            len(purchased),
+        )
+        return [str(p) for p in purchased]
+
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *, number_type: str = "mobile") -> str:
+        data = self.api.pool_assign(client_id, country_iso, client_name, number_type)
+        proxy = data.get("proxy") if isinstance(data, dict) else None
+        if not proxy:
+            raise ExternalServiceError("Réponse Render invalide: proxy manquant")
+        return str(proxy)
+
+    def sync_with_provider(self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        return self.api.pool_sync(apply=apply)
+
+    def fix_voice_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
+    ) -> dict[str, Any]:
+        return self.api.pool_fix_webhooks(dry_run=dry_run, only_country=only_country, only_status=only_status)
+
+
 class SheetsStore(ClientStore):
     SCOPES = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -829,6 +1029,13 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
+def make_render_api_client(logger: logging.Logger) -> RenderAPIClient:
+    base_url = ensure_env("PUBLIC_BASE_URL")
+    token = os.getenv("PROXYCALL_API_TOKEN")
+    logger.info("[blue]CLI[/blue] mode Render base_url=%s token=%s", base_url, "present" if token else "absent")
+    return RenderAPIClient(base_url, token, logger)
+
+
 def make_proxy_mock(client_id: int, country_code: str) -> str:
     h = hashlib.sha256(str(client_id).encode("utf-8")).hexdigest()
     digits = "".join([c for c in h if c.isdigit()])[:9].ljust(9, "0")
@@ -883,6 +1090,8 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     elif assign_proxy:
         if args.mode == "mock":
             proxy = make_proxy_mock(client_id, cc)
+        elif args.mode == "render":
+            proxy = None  # achat géré côté backend Render
         else:
             account_sid = ensure_env("TWILIO_ACCOUNT_SID")
             auth_token = ensure_env("TWILIO_AUTH_TOKEN")
@@ -1204,6 +1413,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
     mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
+    mode.add_argument("--render", action="store_true", help="Mode RENDER (appels HTTP vers l'API Render).")
 
     p.epilog = "Astuce : lance simplement `python cli.py` et laisse-toi guider, aucun argument n'est requis."
 
@@ -1271,10 +1481,13 @@ def select_mode(args: argparse.Namespace) -> str:
         return "live"
     if args.mock:
         return "mock"
+    if getattr(args, "render", False):
+        return "render"
 
     print("Bienvenue ! Choisis le mode de démonstration :")
     print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
     print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
+    print("  3) Mode Render distant (appels HTTP vers l'API hébergée)")
 
     while True:
         user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
@@ -1282,12 +1495,17 @@ def select_mode(args: argparse.Namespace) -> str:
             return "mock"
         if user_choice == "2":
             return "live"
-        print("Merci de répondre par 1 ou 2.")
+        if user_choice == "3":
+            return "render"
+        print("Merci de répondre par 1, 2 ou 3.")
 
 
 def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
     if mode == "mock":
         return MockJsonStore(Path(args.fixtures), logger=logger)
+    if mode == "render":
+        api = make_render_api_client(logger)
+        return RenderClientStore(api, logger)
 
     sheet_name = ensure_env("GOOGLE_SHEET_NAME")
     sa_env = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
@@ -1309,6 +1527,9 @@ def make_pool_store(mode: str, args: argparse.Namespace, logger: logging.Logger)
     batch_size = int(os.getenv("TWILIO_POOL_SIZE", "2"))
     if mode == "mock":
         return MockPoolStore(Path(args.pools_fixtures), logger=logger, default_batch=batch_size)
+    if mode == "render":
+        api = make_render_api_client(logger)
+        return RenderPoolStore(api, logger)
     return LivePoolStore(logger=logger, default_batch=batch_size)
 
 

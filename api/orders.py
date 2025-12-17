@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 
 from services.orders_service import OrdersService
 
@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 @router.post("")
 def create_order(
-    order_id: str,
-    client_id: str,
-    client_name: str,
-    client_mail: str,
-    client_real_phone: str,
-    client_iso_residency: str | None = None,
+    order_id: str = Body(...),
+    client_id: str = Body(...),
+    client_name: str = Body(...),
+    client_mail: str = Body(...),
+    client_real_phone: str = Body(...),
+    client_iso_residency: str | None = Body(None),
 ):
     try:
         return OrdersService.create_order(

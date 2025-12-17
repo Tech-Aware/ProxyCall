@@ -3,7 +3,7 @@ import os
 
 from fastapi import FastAPI
 
-from api import orders, twilio_webhook
+from api import orders, twilio_webhook, clients, pool
 from api.twilio_webhook import router as twilio_router
 from app.config import settings
 
@@ -37,5 +37,7 @@ async def on_startup() -> None:
 
 
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
+app.include_router(clients.router, prefix="/clients", tags=["Clients"])
+app.include_router(pool.router, prefix="/pool", tags=["Pool"])
 app.include_router(twilio_webhook.router, prefix="/twilio", tags=["Twilio"])
 app.include_router(twilio_router)

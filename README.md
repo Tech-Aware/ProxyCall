@@ -69,3 +69,5 @@ Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./r
 
 Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render pour l'URL/token uniquement) sont décrits dans `docs/deploiement_render.md`.
 
+Pour consommer le backend depuis n'importe quel poste (ex. Windows), lancez la CLI avec `--render` afin d'envoyer les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN`.
+
