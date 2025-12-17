@@ -63,6 +63,45 @@ class TwilioClient:
             logger.error("[red]Twilio[/red] auth_check FAILED: %s", exc)
             return False
 
+    @staticmethod
+    def send_sms(*, from_number: str, to_number: str, body: str) -> dict[str, object]:
+        """Envoie un SMS via Twilio avec journalisation détaillée."""
+
+        from_norm = TwilioClient._normalize_phone_number(from_number)
+        to_norm = TwilioClient._normalize_phone_number(to_number)
+
+        if not from_norm or not to_norm:
+            raise ValueError("from_number et to_number doivent être renseignés au format E.164")
+
+        body_safe = body or ""
+        try:
+            logger.info(
+                "[cyan]Twilio[/cyan] send SMS",
+                extra={
+                    "from": mask_phone(from_norm),
+                    "to": mask_phone(to_norm),
+                    "length": len(body_safe),
+                },
+            )
+            msg = twilio.messages.create(from_=from_norm, to=to_norm, body=body_safe)
+            sid = getattr(msg, "sid", "")
+            logger.info(
+                "[green]Twilio[/green] SMS envoyé",
+                extra={"sid": mask_sid(str(sid)), "to": mask_phone(to_norm)},
+            )
+            return {"sid": sid, "to": to_norm, "from": from_norm}
+        except TwilioRestException as exc:
+            logger.error(
+                "[red]Twilio[/red] SMS refusé code=%s status=%s err=%s",
+                getattr(exc, "code", None),
+                getattr(exc, "status", None),
+                str(exc),
+            )
+            raise
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("[red]Twilio[/red] SMS échec inattendu", exc_info=exc)
+            raise
+
     # -----------------------
     # Webhook helpers
     # -----------------------
@@ -103,6 +142,49 @@ class TwilioClient:
         except Exception as exc:
             logger.warning(
                 "ensure_voice_webhook failed: phone=%s err=%s",
+                mask_phone(str(phone_number)),
+                exc,
+            )
+            return False
+
+    @staticmethod
+    def ensure_messaging_webhook(phone_number: str) -> bool:
+        """S'assure que sms_url du numéro Twilio pointe vers le webhook configuré.
+
+        Retourne True si une mise à jour a été effectuée, False sinon.
+        """
+
+        try:
+            pn = TwilioClient._normalize_phone_number(phone_number)
+            if not pn:
+                return False
+
+            target = (settings.MESSAGING_WEBHOOK_URL or "").strip()
+            if not target:
+                logger.warning(
+                    "MESSAGING_WEBHOOK_URL vide: impossible de corriger %s",
+                    mask_phone(pn),
+                )
+                return False
+
+            incoming = twilio.incoming_phone_numbers.list(phone_number=pn, limit=1)
+            if not incoming:
+                return False
+
+            current = (getattr(incoming[0], "sms_url", "") or "").strip()
+            if current == target:
+                return False
+
+            incoming[0].update(sms_url=target)
+            logger.info(
+                "[cyan]Twilio[/cyan] sms_url updated number=%s",
+                mask_phone(pn),
+            )
+            return True
+
+        except Exception as exc:
+            logger.warning(
+                "ensure_messaging_webhook failed: phone=%s err=%s",
                 mask_phone(str(phone_number)),
                 exc,
             )
@@ -194,6 +276,96 @@ class TwilioClient:
 
         return {
             "target_voice_url": target_url,
+            "checked": checked,
+            "need_fix": need_fix,
+            "fixed": fixed,
+            "not_found_on_twilio": not_found,
+            "errors": errors,
+            "dry_run": dry_run,
+            "only_status": only_status,
+            "only_country": only_country,
+            "ts": datetime.utcnow().isoformat(),
+        }
+
+    @classmethod
+    def fix_pool_messaging_webhooks(
+        cls,
+        *,
+        only_status: str | None = None,
+        dry_run: bool = False,
+        only_country: str | None = None,
+    ) -> dict[str, object]:
+        """Synchronise sms_url des numéros du pool avec le webhook configuré."""
+
+        target_url = (settings.MESSAGING_WEBHOOK_URL or "").strip()
+        if not target_url:
+            raise RuntimeError(
+                "MESSAGING_WEBHOOK_URL est vide: impossible de fixer les webhooks SMS."
+            )
+
+        records = PoolsRepository.list_all()
+
+        checked = 0
+        not_found: list[str] = []
+        need_fix: list[dict[str, str]] = []
+        fixed: list[str] = []
+        errors: list[dict[str, str]] = []
+
+        status_filter = (only_status or "").strip().lower() or None
+        country_filter = (only_country or "").strip().upper() or None
+
+        logger.info(
+            "[magenta]POOL[/magenta] fix_pool_messaging_webhooks start dry_run=%s only_status=%s only_country=%s",
+            dry_run,
+            status_filter or "all",
+            country_filter or "all",
+        )
+
+        for rec in records:
+            try:
+                if status_filter:
+                    st = str(rec.get("status", "")).strip().lower()
+                    if st != status_filter:
+                        continue
+
+                if country_filter:
+                    c = str(rec.get("country_iso", "")).strip().upper()
+                    if c != country_filter:
+                        continue
+
+                phone = cls._normalize_phone_number(rec.get("phone_number"))
+                if not phone:
+                    continue
+
+                checked += 1
+
+                incoming = twilio.incoming_phone_numbers.list(phone_number=phone, limit=1)
+                if not incoming:
+                    not_found.append(phone)
+                    continue
+
+                current = (getattr(incoming[0], "sms_url", "") or "").strip()
+                if current != target_url:
+                    need_fix.append({"phone_number": phone, "current_sms_url": current})
+                    if not dry_run:
+                        incoming[0].update(sms_url=target_url)
+                        fixed.append(phone)
+
+            except Exception as exc:
+                errors.append({"phone_number": str(rec.get("phone_number", "")), "err": str(exc)})
+
+        logger.info(
+            "[magenta]POOL[/magenta] fix_pool_messaging_webhooks done checked=%s need_fix=%s fixed=%s not_found=%s errors=%s dry_run=%s",
+            checked,
+            len(need_fix),
+            len(fixed),
+            len(not_found),
+            len(errors),
+            dry_run,
+        )
+
+        return {
+            "target_sms_url": target_url,
             "checked": checked,
             "need_fix": need_fix,
             "fixed": fixed,
@@ -375,6 +547,7 @@ class TwilioClient:
             create_kwargs: dict[str, object] = {
                 "phone_number": phone_number,
                 "voice_url": settings.VOICE_WEBHOOK_URL,
+                "sms_url": settings.MESSAGING_WEBHOOK_URL,
                 "friendly_name": friendly_name,
             }
 
