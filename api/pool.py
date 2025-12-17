@@ -78,15 +78,31 @@ def sync_pool(apply: bool = Body(True)):
         raise HTTPException(status_code=500, detail="Erreur sync pool") from exc
 
 
+@router.post("/purge-sans-sms")
+def purge_sans_sms():
+    try:
+        result = TwilioClient.purge_pool_without_sms_capability()
+        return result
+    except Exception as exc:  # pragma: no cover - dépendances externes
+        logger.exception(
+            "Erreur lors de la purge des numéros sans SMS", exc_info=exc
+        )
+        raise HTTPException(status_code=500, detail="Erreur purge pool") from exc
+
+
 @router.post("/fix-webhooks")
 def fix_webhooks(
     dry_run: bool = Body(True),
     only_country: str | None = Body(None),
     only_status: str | None = Body(None),
+    fix_sms: bool = Body(True),
 ):
     try:
         result = TwilioClient.fix_pool_voice_webhooks(
-            dry_run=dry_run, only_country=only_country, only_status=only_status
+            dry_run=dry_run,
+            only_country=only_country,
+            only_status=only_status,
+            fix_sms=fix_sms,
         )
         return result
     except Exception as exc:  # pragma: no cover - dépendances externes
