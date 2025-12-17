@@ -77,6 +77,7 @@ def lancer_serveur() -> None:
         sys.exit(1)
 
     LOGGER.info("Lancement d'uvicorn sur 0.0.0.0:%s", port)
+    print("DÉMARRAGE - Valeur PORT =", port)
     uvicorn.run("app.main:app", host="0.0.0.0", port=port)
 
 
