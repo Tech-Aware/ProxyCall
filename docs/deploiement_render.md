@@ -4,7 +4,7 @@ Ce guide résume la mise en production de ProxyCall sur Render (API FastAPI) ain
 
 ## 1. Schéma global
 - **Backend** : service web Render exécutant `uvicorn app.main:app`. Il expose les routes `/orders` et `/twilio/voice` pour la logique métier et les webhooks Twilio.
-- **CLI** : utilisable par n'importe quel utilisateur. Elle lit un fichier `.env.render` local pour obtenir l'URL Render et les clés nécessaires pour envoyer des requêtes HTTP ou piloter Twilio/Google Sheets.
+- **CLI** : utilisable par n'importe quel utilisateur. Elle lit un fichier `.env.render` local pour obtenir l'URL Render (et éventuellement un token d'accès) puis envoie des requêtes HTTP au backend.
 - **Secrets** : les clés sensibles (Twilio, Google) restent dans le dashboard Render et sont injectées en variables d'environnement ou fichiers secrets.
 
 ## 2. Blueprint Render (`render.yaml`)
@@ -23,10 +23,8 @@ Pour déployer :
 1. Copiez `.env.render.example` en `.env.render` et complétez :
    - `PUBLIC_BASE_URL` : URL Render publique (ex. `https://proxycall.onrender.com`).
    - `PROXYCALL_API_TOKEN` : si vous protégez l'API par un header ou une auth personnalisée.
-   - Clés Twilio (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, etc.) pour les actions LIVE.
-   - Paramètres Google (`GOOGLE_SHEET_NAME`, `GOOGLE_SERVICE_ACCOUNT_FILE`).
 2. La CLI charge automatiquement `.env.render` puis `.env`, avec redaction des logs (Rich) et messages d'erreur détaillés.
-3. Chaque utilisateur conserve son `.env.render` local : sans les clés valides, aucune requête sensible ne peut être effectuée.
+3. Les secrets Twilio/Google restent sur Render : la CLI n'en a pas besoin pour appeler les endpoints.
 
 ## 4. Sécurité et bonnes pratiques
 - Ne commitez jamais les secrets : utilisez le dashboard Render pour les variables et secret files.

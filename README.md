@@ -67,5 +67,5 @@ Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./r
 
 ## Déploiement Render
 
-Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render, secrets Twilio/Google) sont décrits dans `docs/deploiement_render.md`.
+Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render pour l'URL/token uniquement) sont décrits dans `docs/deploiement_render.md`.
 
