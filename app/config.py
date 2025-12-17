@@ -19,6 +19,9 @@ class Settings:
     VOICE_WEBHOOK_URL: str | None = (
         f"{PUBLIC_BASE_URL}/twilio/voice" if PUBLIC_BASE_URL else None
     )
+    MESSAGING_WEBHOOK_URL: str | None = (
+        f"{PUBLIC_BASE_URL}/twilio/sms" if PUBLIC_BASE_URL else None
+    )
 
     GOOGLE_SHEET_NAME: str = os.getenv("GOOGLE_SHEET_NAME")
     GOOGLE_SERVICE_ACCOUNT_FILE: str = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
