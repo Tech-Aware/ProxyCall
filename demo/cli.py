@@ -783,14 +783,33 @@ class RenderClientStore(ClientStore):
         cid = str(parse_client_id(client_id))
         if cid in self._cache:
             return self._cache[cid]
-        data = self.api.get_client(cid)
+        try:
+            data = self.api.get_client(cid)
+        except ExternalServiceError as exc:
+            status = exc.details.get("status") if isinstance(exc, ExternalServiceError) else None
+            if status == 404:
+                self.logger.warning(
+                    "[red]RENDER[/red] client %s introuvable (404).", cid
+                )
+                return None
+            raise
         client = self._to_demo_client(data)
         self._cache[cid] = client
         return client
 
     def get_by_proxy(self, proxy_number: str | int) -> Optional[DemoClient]:
         proxy = normalize_phone_digits(proxy_number, label="proxy")
-        data = self.api.get_client_by_proxy(proxy)
+        try:
+            data = self.api.get_client_by_proxy(proxy)
+        except ExternalServiceError as exc:
+            status = exc.details.get("status") if isinstance(exc, ExternalServiceError) else None
+            if status == 404:
+                self.logger.warning(
+                    "[red]RENDER[/red] client introuvable pour le proxy %s (404).",
+                    proxy,
+                )
+                return None
+            raise
         client = self._to_demo_client(data)
         self._cache[str(client.client_id)] = client
         return client
@@ -1737,28 +1756,33 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         lookup_choice = input("Votre sélection (1 par défaut) : ").strip() or "1"
 
                         found = None
-                        if lookup_choice == "1":
-                            client_id_raw = input("ID client (ex: 1) : ").strip()
-                            if not client_id_raw:
-                                print("Merci de saisir un ID numérique.\n")
-                                continue
-                            try:
-                                client_id_val = parse_client_id(client_id_raw)
-                            except CLIError as exc:
-                                logger.error("ID invalide: %s", exc)
-                                continue
-                            found = store.get_by_id(client_id_val)
+                        try:
+                            if lookup_choice == "1":
+                                client_id_raw = input("ID client (ex: 1) : ").strip()
+                                if not client_id_raw:
+                                    print("Merci de saisir un ID numérique.\n")
+                                    continue
+                                try:
+                                    client_id_val = parse_client_id(client_id_raw)
+                                except CLIError as exc:
+                                    logger.error("ID invalide: %s", exc)
+                                    continue
+                                found = store.get_by_id(client_id_val)
 
-                        elif lookup_choice == "2":
-                            proxy = input("Numéro proxy (ex: +33900000000) : ").strip()
-                            try:
-                                proxy_norm = normalize_phone_digits(proxy, label="proxy")
-                            except CLIError as exc:
-                                logger.error("Proxy invalide: %s", exc)
+                            elif lookup_choice == "2":
+                                proxy = input("Numéro proxy (ex: +33900000000) : ").strip()
+                                try:
+                                    proxy_norm = normalize_phone_digits(proxy, label="proxy")
+                                except CLIError as exc:
+                                    logger.error("Proxy invalide: %s", exc)
+                                    continue
+                                found = store.get_by_proxy(proxy_norm)
+                            else:
+                                print("Merci de choisir 1 ou 2.\n")
                                 continue
-                            found = store.get_by_proxy(proxy_norm)
-                        else:
-                            print("Merci de choisir 1 ou 2.\n")
+                        except CLIError as exc:
+                            logger.error("Recherche client impossible: %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
                             continue
 
                         if not found:
@@ -1781,7 +1805,12 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             print(colorize(f"\n❌ {exc}\n", "red"))
                             continue
 
-                        existing = store.get_by_id(client_id_val)
+                        try:
+                            existing = store.get_by_id(client_id_val)
+                        except CLIError as exc:
+                            logger.error("Recherche client pour attribution impossible: %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
+                            continue
                         if not existing:
                             print("Aucun client correspondant.\n")
                             continue
