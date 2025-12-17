@@ -6,12 +6,8 @@ import sys
 
 import uvicorn
 
-from app.main import app
-
 
 LOGGER = logging.getLogger(__name__)
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
-
 
 
 def _configure_logging() -> None:
@@ -81,8 +77,7 @@ def lancer_serveur() -> None:
         sys.exit(1)
 
     LOGGER.info("Lancement d'uvicorn sur 0.0.0.0:%s", port)
-    print("DÉMARRAGE - Valeur PORT =", port)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
