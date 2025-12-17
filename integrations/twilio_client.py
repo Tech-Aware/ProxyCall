@@ -214,6 +214,7 @@ class TwilioClient:
         friendly_name: str,
         number_type: str = settings.TWILIO_NUMBER_TYPE,
         candidates_limit: int = 10,
+        require_sms_capability: bool = True,
     ) -> str:
         """
         Achète un numéro Twilio et retourne son phone_number.
@@ -224,12 +225,42 @@ class TwilioClient:
         - On envoie toujours address_sid + bundle_sid si présents
         """
 
+        def _has_voice_and_sms(candidate: Any) -> tuple[bool, bool]:
+            capabilities = getattr(candidate, "capabilities", {}) or {}
+            voice_ok = bool(capabilities.get("voice") or capabilities.get("VOICE"))
+            sms_ok = bool(capabilities.get("sms") or capabilities.get("SMS"))
+
+            # Compat attributs Twilio
+            voice_ok = voice_ok or bool(getattr(candidate, "voice_enabled", False))
+            sms_ok = sms_ok or bool(getattr(candidate, "sms_enabled", False))
+            return voice_ok, sms_ok
+
         def _list_available(kind: str):
             apn = twilio.available_phone_numbers(country)
             if not hasattr(apn, kind):
                 return []
             lim = max(1, int(candidates_limit or 10))
-            return getattr(apn, kind).list(limit=lim)
+            candidates = getattr(apn, kind).list(limit=lim)
+
+            if not require_sms_capability:
+                return candidates
+
+            filtered: list[Any] = []
+            for candidate in candidates:
+                voice_ok, sms_ok = _has_voice_and_sms(candidate)
+                if voice_ok and sms_ok:
+                    filtered.append(candidate)
+                    continue
+
+                logger.info(
+                    "[cyan]Twilio[/cyan] ignore candidat sans voice+sms country=%s type=%s number=%s caps=%s",
+                    country,
+                    kind,
+                    mask_phone(getattr(candidate, "phone_number", "")),
+                    getattr(candidate, "capabilities", {}),
+                )
+
+            return filtered
 
         requested = (number_type or "mobile").strip().lower()
         effective = "local" if requested == "national" else requested
@@ -288,7 +319,10 @@ class TwilioClient:
                 available_numbers = []
 
         if not available_numbers:
-            raise RuntimeError(f"Aucun numéro disponible pour {country} (type={effective}).")
+            sms_clause = " avec capacité SMS" if require_sms_capability else ""
+            raise RuntimeError(
+                f"Aucun numéro disponible pour {country} (type={effective}{sms_clause})."
+            )
 
         logger.info(
             "[cyan]Twilio[/cyan] candidates found country=%s effective=%s count=%s",
@@ -415,6 +449,7 @@ class TwilioClient:
         batch_size: int,
         number_type: str = settings.TWILIO_NUMBER_TYPE,
         candidates_limit: int = 10,
+        require_sms_capability: bool = True,
     ) -> list[str]:
         country = (country or "").upper().strip()
         requested = (number_type or "mobile").strip().lower()
@@ -425,11 +460,12 @@ class TwilioClient:
         qty = max(1, int(batch_size or 1))
 
         logger.info(
-            "[magenta]POOL[/magenta] fill start country=%s requested_qty=%s requested_type=%s stored_type=%s",
+            "[magenta]POOL[/magenta] fill start country=%s requested_qty=%s requested_type=%s stored_type=%s require_sms=%s",
             country,
             qty,
             requested,
             stored_type,
+            require_sms_capability,
         )
 
         added: list[str] = []
@@ -449,6 +485,7 @@ class TwilioClient:
                     friendly,
                     number_type=number_type,
                     candidates_limit=candidates_limit,
+                    require_sms_capability=require_sms_capability,
                 )
             except RuntimeError as exc:
                 logger.warning(
@@ -498,12 +535,14 @@ class TwilioClient:
         batch_size: int,
         number_type: str = settings.TWILIO_NUMBER_TYPE,
         candidates_limit: int = 10,
+        require_sms_capability: bool = True,
     ) -> list[str]:
         return cls._fill_pool(
             country,
             batch_size,
             number_type=number_type,
             candidates_limit=candidates_limit,
+            require_sms_capability=require_sms_capability,
         )
 
     @classmethod
