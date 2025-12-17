@@ -23,6 +23,8 @@ def provision(
     batch_size: int = Body(1),
     number_type: str = Body("mobile"),
     require_sms_capability: bool = Body(True),
+    require_voice_capability: bool = Body(True),
+    candidates_limit: int = Body(10),
 ):
     try:
         purchased = TwilioClient.fill_pool(
@@ -30,12 +32,16 @@ def provision(
             batch_size,
             number_type=number_type,
             require_sms_capability=require_sms_capability,
+            require_voice_capability=require_voice_capability,
+            candidates_limit=candidates_limit,
         )
         return {
             "country_iso": country_iso.upper(),
             "purchased_now": purchased,
             "number_type": number_type,
             "require_sms_capability": require_sms_capability,
+            "require_voice_capability": require_voice_capability,
+            "candidates_limit": candidates_limit,
         }
     except Exception as exc:  # pragma: no cover - dépendances externes
         logger.exception("Erreur lors de l'approvisionnement du pool", exc_info=exc)
