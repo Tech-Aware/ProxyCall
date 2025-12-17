@@ -810,17 +810,21 @@ def ensure_env(var: str) -> str:
 
 
 def load_env_files() -> list[Path]:
+    """Charge .env.render puis .env afin de préparer la CLI pour Render."""
+
     loaded: list[Path] = []
+    repo_root = Path(__file__).resolve().parent.parent
 
-    repo_env = Path(__file__).resolve().parent.parent / ".env"
-    if repo_env.exists():
-        load_dotenv(repo_env)
-        loaded.append(repo_env)
+    for filename in (".env.render", ".env"):
+        repo_env = repo_root / filename
+        if repo_env.exists():
+            load_dotenv(repo_env, override=True)
+            loaded.append(repo_env)
 
-    discovered = Path(find_dotenv(usecwd=True))
-    if discovered and discovered.exists() and discovered not in loaded:
-        load_dotenv(discovered)
-        loaded.append(discovered)
+        discovered = Path(find_dotenv(filename=filename, usecwd=True))
+        if discovered and discovered.exists() and discovered not in loaded:
+            load_dotenv(discovered, override=True)
+            loaded.append(discovered)
 
     return loaded
 
@@ -1567,14 +1571,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    load_env_files()
-
-    mode = select_mode(args)
-    args.mode = mode
-
     # ✅ New: Rich logging config (color + redaction). Verbose => DEBUG.
     configure_cli_logging(verbose=bool(args.verbose or str(args.log_level).upper() == "DEBUG"))
     logger = logging.getLogger(__name__)
+
+    loaded_envs = load_env_files()
+    if loaded_envs:
+        logger.debug(
+            "Fichiers d'environnement chargés: %s",
+            ", ".join(str(p) for p in loaded_envs),
+        )
+    else:
+        logger.warning(
+            "Aucun fichier .env/.env.render trouvé : utilisation exclusive des variables d'environnement"
+        )
+
+    mode = select_mode(args)
+    args.mode = mode
 
     try:
         store = make_store(mode, args, logger)

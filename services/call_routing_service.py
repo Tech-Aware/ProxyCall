@@ -45,10 +45,13 @@ class CallRoutingService:
             extra={"client_country_code": client_cc, "caller_country_code": caller_cc},
         )
 
-        # TEMP: désactivation du filtrage par pays pour debug
-        # if client_cc and client_cc != caller_cc:
-        #     resp.say("Ce numéro n'est pas accessible depuis votre pays.", language="fr-FR")
-        #     return str(resp)
+        if client_cc and client_cc != caller_cc:
+            logger.warning(
+                "Appel bloqué : indicatif différent",
+                extra={"client_country_code": client_cc, "caller_country_code": caller_cc},
+            )
+            resp.say("Ce numéro n'est pas accessible depuis votre pays.", language="fr-FR")
+            return str(resp)
 
         proxy_e164 = proxy_number if proxy_number.startswith("+") else f"+{proxy_number}"
         real_e164 = (

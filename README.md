@@ -65,3 +65,7 @@ Pour exécuter l'ensemble des tests (unitaires, démo et live si les variables s
 ```
 Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./run_tests.sh -k call_routing`.
 
+## Déploiement Render
+
+Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render, secrets Twilio/Google) sont décrits dans `docs/deploiement_render.md`.
+
