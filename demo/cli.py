@@ -1496,10 +1496,15 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
             print(f"... +{len(errors) - 20} autres")
 
     logger.info(
-        "[magenta]POOL[/magenta] fix_webhooks report checked=%s need_fix=%s fixed=%s dry_run=%s",
+        (
+            "[magenta]POOL[/magenta] fix_webhooks report checked=%s "
+            "need_fix_voice=%s need_fix_sms=%s fixed_voice=%s fixed_sms=%s dry_run=%s"
+        ),
         checked,
-        len(need_fix),
-        len(fixed),
+        len(need_fix_voice),
+        len(need_fix_sms),
+        len(fixed_voice),
+        len(fixed_sms),
         dry_run,
     )
     return 0
