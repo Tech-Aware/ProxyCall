@@ -215,6 +215,7 @@ class TwilioClient:
         number_type: str = settings.TWILIO_NUMBER_TYPE,
         candidates_limit: int = 10,
         require_sms_capability: bool = True,
+        require_voice_capability: bool = True,
     ) -> str:
         """
         Achète un numéro Twilio et retourne son phone_number.
@@ -240,25 +241,51 @@ class TwilioClient:
             if not hasattr(apn, kind):
                 return []
             lim = max(1, int(candidates_limit or 10))
-            candidates = getattr(apn, kind).list(limit=lim)
+            list_kwargs: dict[str, object] = {
+                "limit": lim,
+                "page_size": min(lim, 100),
+            }
 
-            if not require_sms_capability:
-                return candidates
+            if require_sms_capability:
+                list_kwargs["sms_enabled"] = True
+            if require_voice_capability:
+                list_kwargs["voice_enabled"] = True
+
+            logger.info(
+                "[cyan]Twilio[/cyan] search available country=%s type=%s limit=%s sms_enabled=%s voice_enabled=%s",
+                country,
+                kind,
+                lim,
+                list_kwargs.get("sms_enabled", False),
+                list_kwargs.get("voice_enabled", False),
+            )
+
+            candidates = getattr(apn, kind).list(**list_kwargs)
 
             filtered: list[Any] = []
             for candidate in candidates:
                 voice_ok, sms_ok = _has_voice_and_sms(candidate)
-                if voice_ok and sms_ok:
-                    filtered.append(candidate)
+                if require_sms_capability and not sms_ok:
+                    logger.info(
+                        "[cyan]Twilio[/cyan] ignore candidat sans SMS country=%s type=%s number=%s caps=%s",
+                        country,
+                        kind,
+                        mask_phone(getattr(candidate, "phone_number", "")),
+                        getattr(candidate, "capabilities", {}),
+                    )
                     continue
 
-                logger.info(
-                    "[cyan]Twilio[/cyan] ignore candidat sans voice+sms country=%s type=%s number=%s caps=%s",
-                    country,
-                    kind,
-                    mask_phone(getattr(candidate, "phone_number", "")),
-                    getattr(candidate, "capabilities", {}),
-                )
+                if require_voice_capability and not voice_ok:
+                    logger.info(
+                        "[cyan]Twilio[/cyan] ignore candidat sans VOICE country=%s type=%s number=%s caps=%s",
+                        country,
+                        kind,
+                        mask_phone(getattr(candidate, "phone_number", "")),
+                        getattr(candidate, "capabilities", {}),
+                    )
+                    continue
+
+                filtered.append(candidate)
 
             return filtered
 
@@ -270,11 +297,13 @@ class TwilioClient:
             )
 
         logger.info(
-            "[cyan]Twilio[/cyan] lookup available numbers country=%s requested=%s effective=%s limit=%s",
+            "[cyan]Twilio[/cyan] lookup available numbers country=%s requested=%s effective=%s limit=%s require_sms=%s require_voice=%s",
             country,
             requested,
             effective,
             max(1, int(candidates_limit or 10)),
+            require_sms_capability,
+            require_voice_capability,
         )
 
         available_numbers = []
@@ -450,6 +479,7 @@ class TwilioClient:
         number_type: str = settings.TWILIO_NUMBER_TYPE,
         candidates_limit: int = 10,
         require_sms_capability: bool = True,
+        require_voice_capability: bool = True,
     ) -> list[str]:
         country = (country or "").upper().strip()
         requested = (number_type or "mobile").strip().lower()
@@ -460,12 +490,18 @@ class TwilioClient:
         qty = max(1, int(batch_size or 1))
 
         logger.info(
-            "[magenta]POOL[/magenta] fill start country=%s requested_qty=%s requested_type=%s stored_type=%s require_sms=%s",
+            "[magenta]POOL[/magenta] fill start country=%s requested_qty=%s requested_type=%s stored_type=%s require_sms=%s require_voice=%s",
             country,
             qty,
             requested,
             stored_type,
             require_sms_capability,
+            require_voice_capability,
+        )
+
+        logger.info(
+            "[magenta]POOL[/magenta] fill params candidates_limit=%s",
+            candidates_limit,
         )
 
         added: list[str] = []
@@ -486,6 +522,7 @@ class TwilioClient:
                     number_type=number_type,
                     candidates_limit=candidates_limit,
                     require_sms_capability=require_sms_capability,
+                    require_voice_capability=require_voice_capability,
                 )
             except RuntimeError as exc:
                 logger.warning(
@@ -536,6 +573,7 @@ class TwilioClient:
         number_type: str = settings.TWILIO_NUMBER_TYPE,
         candidates_limit: int = 10,
         require_sms_capability: bool = True,
+        require_voice_capability: bool = True,
     ) -> list[str]:
         return cls._fill_pool(
             country,
@@ -543,6 +581,7 @@ class TwilioClient:
             number_type=number_type,
             candidates_limit=candidates_limit,
             require_sms_capability=require_sms_capability,
+            require_voice_capability=require_voice_capability,
         )
 
     @classmethod

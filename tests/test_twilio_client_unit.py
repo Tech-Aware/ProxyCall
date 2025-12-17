@@ -37,10 +37,19 @@ class DummyPoolsRepo:
 
 
 class DummyNumber:
-    def __init__(self, phone_number="+33123456789", friendly_name="", iso_country="FR"):
+    def __init__(
+        self,
+        phone_number="+33123456789",
+        friendly_name="",
+        iso_country="FR",
+        capabilities=None,
+    ):
         self.phone_number = phone_number
         self.friendly_name = friendly_name
         self.iso_country = iso_country
+        self.capabilities = capabilities or {}
+        self.sms_enabled = bool(self.capabilities.get("sms"))
+        self.voice_enabled = bool(self.capabilities.get("voice"))
 
     def update(self, **kwargs):
         return kwargs
@@ -53,13 +62,21 @@ class DummyTwilio:
         self.update_calls = []
         self.create_exception = create_exception
 
-        self._available_local = types.SimpleNamespace(list=lambda limit=1: list(self._numbers))
-        self._available_mobile = types.SimpleNamespace(list=lambda limit=1: list(self._numbers))
+        self.last_list_calls = []
+
+        self._available_local = types.SimpleNamespace(list=self._list_available)
+        self._available_mobile = types.SimpleNamespace(list=self._list_available)
 
         self.incoming_phone_numbers = types.SimpleNamespace(create=self._create, list=self._list)
 
     def available_phone_numbers(self, country):
         return types.SimpleNamespace(local=self._available_local, mobile=self._available_mobile)
+
+    def _list_available(self, limit=1, **kwargs):
+        params = {"limit": limit}
+        params.update(kwargs)
+        self.last_list_calls.append(params)
+        return list(self._numbers)
 
     def _create(self, phone_number, voice_url, friendly_name, **kwargs):
         if self.create_exception:
@@ -158,6 +175,42 @@ def test_purchase_number_local_bundle_required(monkeypatch):
         TwilioClient._purchase_number(country="FR", friendly_name="Test", number_type="local")
 
     assert "bundle" in str(err.value)
+
+
+def test_purchase_number_uses_sms_and_voice_filters(monkeypatch):
+    dummy_twilio = DummyTwilio()
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+
+    TwilioClient._purchase_number(
+        country="FR",
+        friendly_name="Test",
+        number_type="local",
+        candidates_limit=5,
+    )
+
+    assert dummy_twilio.last_list_calls, "La recherche Twilio doit être appelée"
+    params = dummy_twilio.last_list_calls[-1]
+    assert params["sms_enabled"] is True
+    assert params["voice_enabled"] is True
+    assert params["limit"] == 5
+
+
+def test_purchase_number_accepts_sms_only_when_voice_not_required(monkeypatch):
+    sms_only = DummyNumber("+33900000000", capabilities={"sms": True, "voice": False})
+    dummy_twilio = DummyTwilio(numbers=[sms_only])
+    monkeypatch.setattr(twilio_client, "twilio", dummy_twilio)
+
+    purchased = TwilioClient._purchase_number(
+        country="FR",
+        friendly_name="Test",
+        number_type="local",
+        require_voice_capability=False,
+    )
+
+    assert purchased == "+33900000000"
+    params = dummy_twilio.last_list_calls[-1]
+    assert params.get("sms_enabled") is True
+    assert params.get("voice_enabled") in (None, False)
 
 
 def test_sync_twilio_numbers_adds_missing(monkeypatch):
