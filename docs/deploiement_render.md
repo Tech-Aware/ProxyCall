@@ -3,14 +3,14 @@
 Ce guide résume la mise en production de ProxyCall sur Render (API FastAPI) ainsi que la préparation de la CLI pour consommer ce backend hébergé.
 
 ## 1. Schéma global
-- **Backend** : service web Render exécutant `uvicorn app.main:app`. Il expose les routes `/orders` et `/twilio/voice` pour la logique métier et les webhooks Twilio.
+- **Backend** : service web Render exécutant `python -m app.run`. Il expose les routes `/orders` et `/twilio/voice` pour la logique métier et les webhooks Twilio.
 - **CLI** : utilisable par n'importe quel utilisateur. Elle lit un fichier `.env.render` local pour obtenir l'URL Render (et éventuellement un token d'accès) puis envoie des requêtes HTTP au backend.
 - **Secrets** : les clés sensibles (Twilio, Google) restent dans le dashboard Render et sont injectées en variables d'environnement ou fichiers secrets.
 
 ## 2. Blueprint Render (`render.yaml`)
 Le fichier `render.yaml` à la racine définit un service web Python sur un plan **pro** Render en région **frankfurt** pour disposer de ressources accrues :
 - Installation via `pip install -r requirements.txt`.
-- Lancement via `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (Render expose automatiquement `$PORT`). **Ne pas ajouter de ponctuation après `$PORT`** : un point final entraînerait l'erreur Render `Invalid value for '--port': '10000.' is not a valid integer`.
+- Lancement via `python -m app.run` (le module gère la normalisation de `$PORT` exposé par Render et journalise toute correction appliquée).
 - Variables d'environnement attendues : `PUBLIC_BASE_URL` (ou `RENDER_EXTERNAL_URL`), identifiants Twilio, paramètres de pool (`TWILIO_PHONE_COUNTRY`, `TWILIO_NUMBER_TYPE`, `TWILIO_POOL_SIZE`) et Google (`GOOGLE_SHEET_NAME`, `GOOGLE_SERVICE_ACCOUNT_FILE`).
 - Le secret JSON Google peut être chargé comme *secret file* et monté à l'emplacement `/etc/secrets/google-credentials.json` pour rester hors du dépôt.
 
