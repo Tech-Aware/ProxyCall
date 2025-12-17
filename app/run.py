@@ -23,16 +23,33 @@ def _configure_logging() -> None:
 
 
 def _extraire_port() -> int:
-    port_brut = os.getenv("PORT", "8000").strip()
+    port_brut = os.getenv("PORT", "8000")
+    port_nettoye = port_brut.strip()
     LOGGER.debug("Valeur brute de PORT reçue: %r", port_brut)
 
-    if port_brut.isdigit():
-        port_str = port_brut
+    if port_nettoye.isdigit():
+        port_str = port_nettoye
     else:
-        port_str = port_brut.rstrip(".")
-        if not port_str.isdigit():
-            correspondances = re.findall(r"\d+", port_brut)
-            port_str = correspondances[0] if len(correspondances) == 1 else ""
+        correspondances = re.findall(r"\d+", port_nettoye)
+        if len(correspondances) == 1:
+            port_str = correspondances[0]
+            LOGGER.warning(
+                "Valeur PORT normalisée de %r vers %s pour rester compatible avec uvicorn.",
+                port_brut,
+                port_str,
+            )
+        elif correspondances:
+            LOGGER.error(
+                "Valeur PORT ambiguë (%r) : plusieurs groupes de chiffres détectés (%s).",
+                port_brut,
+                ", ".join(correspondances),
+            )
+            raise ValueError(f"Port ambigu: {port_brut}")
+        else:
+            LOGGER.error(
+                "Impossible d'extraire un port numérique depuis PORT=%r.", port_brut
+            )
+            raise ValueError(f"Port invalide: {port_brut}")
 
     try:
         port = int(port_str)
@@ -45,6 +62,7 @@ def _extraire_port() -> int:
         raise
 
     if not 0 < port < 65536:
+        LOGGER.error("Port hors plage autorisée: %s", port)
         raise ValueError(f"Port hors plage autorisée: {port}")
 
     return port
