@@ -1,0 +1,35 @@
+# Blueprint Render pour déployer l'API ProxyCall
+services:
+  - type: web
+    name: proxycall-backend
+    env: python
+    plan: pro
+    region: frankfurt
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PUBLIC_BASE_URL
+        sync: false  # à renseigner dans le dashboard (Render fournit RENDER_EXTERNAL_URL)
+      - key: RENDER_EXTERNAL_URL
+        sync: true
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_ADDRESS_SID
+        sync: false
+      - key: TWILIO_BUNDLE_SID
+        sync: false
+      - key: TWILIO_PHONE_COUNTRY
+        value: "US"
+      - key: TWILIO_NUMBER_TYPE
+        value: "mobile"
+      - key: TWILIO_POOL_SIZE
+        value: "3"
+      - key: GOOGLE_SHEET_NAME
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_FILE
+        value: "/etc/secrets/google-credentials.json"
+    secretFiles:
+      - path: /etc/secrets/google-credentials.json
+        envVar: GOOGLE_SERVICE_ACCOUNT_JSON

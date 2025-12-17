@@ -357,6 +357,62 @@ class PoolsRepository:
             logger.exception("Impossible d'enregistrer le numéro dans TwilioPools", exc_info=exc)
 
     @staticmethod
+    def remove_number(phone_number: str) -> bool:
+        """Supprime un numéro du pool TwilioPools.
+
+        Retourne True si la ligne a été supprimée, False sinon.
+        """
+
+        try:
+            normalized = phone_e164_strict(phone_number, field="phone_number")
+        except ValidationIssue as exc:
+            logger.error("[POOL] Suppression refusée: numéro invalide (%s)", exc)
+            return False
+
+        try:
+            sheet = SheetsClient.get_pools_sheet()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Impossible d'ouvrir la feuille TwilioPools pour suppression", exc_info=exc)
+            return False
+
+        try:
+            values = sheet.get_all_values()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Impossible de lire TwilioPools (suppression)", exc_info=exc)
+            return False
+
+        if not values or len(values) < 2:
+            logger.warning("Aucune donnée dans TwilioPools pour supprimer %s", normalized)
+            return False
+
+        for idx, row in enumerate(values[1:], start=2):  # header sur la première ligne
+            phone = (row[1] if len(row) > 1 else "").strip()
+            if phone != normalized:
+                continue
+
+            try:
+                sheet.delete_rows(idx)
+                logger.info(
+                    "Numéro supprimé de TwilioPools",
+                    extra={"phone": normalized, "row_index": idx},
+                )
+                return True
+            except Exception as exc:  # pragma: no cover - dépendances externes
+                logger.exception(
+                    "Impossible de supprimer la ligne %s pour le numéro %s",
+                    idx,
+                    normalized,
+                    exc_info=exc,
+                )
+                return False
+
+        logger.warning(
+            "Numéro introuvable dans TwilioPools pour suppression",
+            extra={"phone": normalized},
+        )
+        return False
+
+    @staticmethod
     def mark_assigned(
         phone_number: str,
         date_attribution: Optional[str] = None,

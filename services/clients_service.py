@@ -109,6 +109,15 @@ class ClientsService:
             return None
 
     @staticmethod
+    def get_client_by_proxy(proxy: str) -> Client | None:
+        """Recherche un client par numéro proxy (Sheets)."""
+        try:
+            return ClientsRepository.get_by_proxy_number(proxy)
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Erreur lors de la recherche client par proxy", exc_info=exc)
+            return None
+
+    @staticmethod
     def create_client(
         client_id: str,
         client_name: str,

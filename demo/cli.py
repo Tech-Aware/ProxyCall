@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
+import httpx
 
 # ✅ New: Rich + redaction logging for CLI
 from app.cli_logging import configure_cli_logging
@@ -244,8 +245,126 @@ class PoolStore:
         dry_run: bool = True,
         only_country: str | None = None,
         only_status: str | None = None,
+        fix_sms: bool = True,
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class RenderAPIClient:
+    def __init__(self, base_url: str, token: str | None, logger: logging.Logger):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.logger = logger
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    def _request(self, method: str, path: str, *, params: dict[str, Any] | None = None, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        try:
+            resp = httpx.request(
+                method,
+                url,
+                params=params,
+                json=json_body,
+                headers=self._headers(),
+                timeout=20,
+            )
+        except Exception as exc:  # pragma: no cover - réseau
+            self.logger.error("[red]RENDER[/red] appel %s %s échoué: %s", method, url, exc)
+            raise ExternalServiceError("Appel Render impossible (réseau)", details={"url": url}) from exc
+
+        if resp.status_code >= 400:
+            detail = resp.text
+            try:
+                detail_json = resp.json()
+                detail = detail_json.get("detail", detail)
+            except Exception:
+                detail_json = None
+            self.logger.error(
+                "[red]RENDER[/red] %s %s -> %s : %s", method, url, resp.status_code, detail
+            )
+            raise ExternalServiceError(
+                f"API Render renvoie {resp.status_code}",
+                details={"url": url, "status": resp.status_code, "detail": detail_json or detail},
+            )
+
+        try:
+            return resp.json()
+        except Exception as exc:  # pragma: no cover
+            raise ExternalServiceError("Réponse Render invalide (JSON)", details={"url": url}) from exc
+
+    # --- Clients ---
+    def create_client(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/clients", json_body=payload)
+
+    def get_client(self, client_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/clients/{client_id}")
+
+    def get_client_by_proxy(self, proxy: str) -> dict[str, Any]:
+        return self._request("GET", f"/clients/by-proxy/{proxy}")
+
+    # --- Orders ---
+    def create_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/orders", json_body=payload)
+
+    # --- Pool ---
+    def pool_available(self, country_iso: str, number_type: str | None) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/pool/available",
+            params={"country_iso": country_iso, "number_type": number_type},
+        )
+
+    def pool_provision(self, country_iso: str, batch_size: int, number_type: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/pool/provision",
+            json_body={"country_iso": country_iso, "batch_size": batch_size, "number_type": number_type},
+        )
+
+    def pool_assign(self, client_id: int, country_iso: str, client_name: str, number_type: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/pool/assign",
+            json_body={
+                "client_id": client_id,
+                "country_iso": country_iso,
+                "client_name": client_name,
+                "number_type": number_type,
+            },
+        )
+
+    def pool_sync(self, apply: bool = True) -> dict[str, Any]:
+        return self._request("POST", "/pool/sync", json_body={"apply": apply})
+
+    def pool_fix_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
+        fix_sms: bool = True,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/pool/fix-webhooks",
+            json_body={
+                "dry_run": dry_run,
+                "only_country": only_country,
+                "only_status": only_status,
+                "fix_sms": fix_sms,
+            },
+        )
+
+    def pool_purge_without_sms(self) -> dict[str, Any]:
+        return self._request("POST", "/pool/purge-sans-sms")
 
 
 class MockJsonStore(ClientStore):
@@ -552,6 +671,9 @@ class MockPoolStore(PoolStore):
     ) -> dict[str, Any]:
         raise ValidationError("Correction des webhooks disponible uniquement en mode LIVE.")
 
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        raise ValidationError("Purge SMS disponible uniquement en mode LIVE.")
+
 
 class LivePoolStore(PoolStore):
     def __init__(self, logger: logging.Logger, *, default_batch: int = 2):
@@ -600,21 +722,162 @@ class LivePoolStore(PoolStore):
         dry_run: bool = True,
         only_country: str | None = None,
         only_status: str | None = None,
+        fix_sms: bool = True,
     ) -> dict[str, Any]:
         from integrations.twilio_client import TwilioClient
         result = TwilioClient.fix_pool_voice_webhooks(
             dry_run=dry_run,
             only_country=only_country,
             only_status=only_status,
+            fix_sms=fix_sms,
         )
         self.logger.info(
-            "[magenta]POOL[/magenta] fix_webhooks done checked=%s need_fix=%s fixed=%s dry_run=%s",
+            "[magenta]POOL[/magenta] fix_webhooks done checked=%s need_fix_voice=%s fixed_voice=%s need_fix_sms=%s fixed_sms=%s dry_run=%s",
             result.get("checked", 0),
-            len(result.get("need_fix", []) or []),
-            len(result.get("fixed", []) or []),
+            len(result.get("need_fix_voice", []) or []),
+            len(result.get("fixed_voice", []) or []),
+            len(result.get("need_fix_sms", []) or []),
+            len(result.get("fixed_sms", []) or []),
             bool(result.get("dry_run", False)),
         )
         return result
+
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        from integrations.twilio_client import TwilioClient
+
+        if not auto_confirm:
+            raise ValidationError("Confirmation requise pour purger les numéros sans SMS (auto_confirm=False).")
+
+        result = TwilioClient.purge_pool_without_sms_capability()
+        self.logger.info(
+            "[magenta]POOL[/magenta] purge sans SMS réalisée checked=%s kept=%s removed=%s released=%s missing=%s errors=%s",
+            result.get("checked", 0),
+            len(result.get("kept_sms_capable", []) or []),
+            len(result.get("removed_from_pool", []) or []),
+            len(result.get("released_on_twilio", []) or []),
+            len(result.get("missing_on_twilio", []) or []),
+            len(result.get("errors", []) or []),
+        )
+        return result
+
+
+class RenderClientStore(ClientStore):
+    def __init__(self, api: RenderAPIClient, logger: logging.Logger):
+        self.api = api
+        self.logger = logger
+        self._cache: dict[str, DemoClient] = {}
+
+    @staticmethod
+    def _to_demo_client(payload: dict[str, Any]) -> DemoClient:
+        return DemoClient(
+            client_id=parse_client_id(payload.get("client_id")),
+            client_name=str(payload.get("client_name", "")),
+            client_mail=str(payload.get("client_mail", "")),
+            client_real_phone=normalize_phone_digits(payload.get("client_real_phone", ""), label="client_real_phone"),
+            client_proxy_number=normalize_phone_digits(payload.get("client_proxy_number", ""), label="client_proxy_number") if payload.get("client_proxy_number") else None,
+            client_iso_residency=str(payload.get("client_iso_residency", "")),
+            client_country_code=str(payload.get("client_country_code", "")),
+        )
+
+    def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
+        cid = str(parse_client_id(client_id))
+        if cid in self._cache:
+            return self._cache[cid]
+        data = self.api.get_client(cid)
+        client = self._to_demo_client(data)
+        self._cache[cid] = client
+        return client
+
+    def get_by_proxy(self, proxy_number: str | int) -> Optional[DemoClient]:
+        proxy = normalize_phone_digits(proxy_number, label="proxy")
+        data = self.api.get_client_by_proxy(proxy)
+        client = self._to_demo_client(data)
+        self._cache[str(client.client_id)] = client
+        return client
+
+    def save(self, client: DemoClient) -> None:
+        payload = {
+            "client_id": str(client.client_id),
+            "client_name": client.client_name,
+            "client_mail": client.client_mail,
+            "client_real_phone": client.client_real_phone,
+            "client_iso_residency": client.client_iso_residency,
+        }
+        data = self.api.create_client(payload)
+        new_client = self._to_demo_client({**payload, **data})
+        self._cache[str(new_client.client_id)] = new_client
+
+    def list_all(self) -> list[DemoClient]:
+        raise ExternalServiceError("Listing complet non exposé par l'API Render")
+
+    def max_client_id(self) -> int:
+        raise ExternalServiceError("max_client_id indisponible en mode Render")
+
+
+class RenderPoolStore(PoolStore):
+    def __init__(self, api: RenderAPIClient, logger: logging.Logger):
+        self.api = api
+        self.logger = logger
+
+    def list_available(self, country_iso: str, number_type: str | None = None) -> list[dict[str, Any]]:
+        data = self.api.pool_available(country_iso, number_type)
+        available = data.get("available", []) if isinstance(data, dict) else []
+        self.logger.info(
+            "[magenta]POOL[/magenta] render available country=%s type=%s count=%s",
+            country_iso,
+            number_type or "all",
+            len(available),
+        )
+        return available
+
+    def provision(self, country_iso: str, batch_size: int, *, friendly_prefix: str, number_type: str = "mobile") -> list[str]:
+        data = self.api.pool_provision(country_iso, batch_size, number_type)
+        purchased = data.get("purchased_now", []) if isinstance(data, dict) else []
+        self.logger.info(
+            "[magenta]POOL[/magenta] render provision country=%s type=%s purchased=%s",
+            country_iso,
+            number_type,
+            len(purchased),
+        )
+        return [str(p) for p in purchased]
+
+    def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *, number_type: str = "mobile") -> str:
+        data = self.api.pool_assign(client_id, country_iso, client_name, number_type)
+        proxy = data.get("proxy") if isinstance(data, dict) else None
+        if not proxy:
+            raise ExternalServiceError("Réponse Render invalide: proxy manquant")
+        return str(proxy)
+
+    def sync_with_provider(self, *, apply: bool = True, twilio_numbers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        return self.api.pool_sync(apply=apply)
+
+    def fix_voice_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
+        fix_sms: bool = True,
+    ) -> dict[str, Any]:
+        return self.api.pool_fix_webhooks(
+            dry_run=dry_run,
+            only_country=only_country,
+            only_status=only_status,
+            fix_sms=fix_sms,
+        )
+
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        if not auto_confirm:
+            raise ValidationError("Confirmation requise pour purger les numéros sans SMS (auto_confirm=False).")
+        data = self.api.pool_purge_without_sms()
+        self.logger.info(
+            "[magenta]POOL[/magenta] render purge sans SMS checked=%s kept=%s removed=%s released=%s",
+            data.get("checked", 0),
+            len(data.get("kept_sms_capable", []) or []),
+            len(data.get("removed_from_pool", []) or []),
+            len(data.get("released_on_twilio", []) or []),
+        )
+        return data
 
 
 class SheetsStore(ClientStore):
@@ -810,19 +1073,30 @@ def ensure_env(var: str) -> str:
 
 
 def load_env_files() -> list[Path]:
+    """Charge .env.render puis .env afin de préparer la CLI pour Render."""
+
     loaded: list[Path] = []
+    repo_root = Path(__file__).resolve().parent.parent
 
-    repo_env = Path(__file__).resolve().parent.parent / ".env"
-    if repo_env.exists():
-        load_dotenv(repo_env)
-        loaded.append(repo_env)
+    for filename in (".env.render", ".env"):
+        repo_env = repo_root / filename
+        if repo_env.exists():
+            load_dotenv(repo_env, override=True)
+            loaded.append(repo_env)
 
-    discovered = Path(find_dotenv(usecwd=True))
-    if discovered and discovered.exists() and discovered not in loaded:
-        load_dotenv(discovered)
-        loaded.append(discovered)
+        discovered = Path(find_dotenv(filename=filename, usecwd=True))
+        if discovered and discovered.exists() and discovered not in loaded:
+            load_dotenv(discovered, override=True)
+            loaded.append(discovered)
 
     return loaded
+
+
+def make_render_api_client(logger: logging.Logger) -> RenderAPIClient:
+    base_url = ensure_env("PUBLIC_BASE_URL")
+    token = os.getenv("PROXYCALL_API_TOKEN")
+    logger.info("[blue]CLI[/blue] mode Render base_url=%s token=%s", base_url, "present" if token else "absent")
+    return RenderAPIClient(base_url, token, logger)
 
 
 def make_proxy_mock(client_id: int, country_code: str) -> str:
@@ -879,6 +1153,8 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     elif assign_proxy:
         if args.mode == "mock":
             proxy = make_proxy_mock(client_id, cc)
+        elif args.mode == "render":
+            proxy = None  # achat géré côté backend Render
         else:
             account_sid = ensure_env("TWILIO_ACCOUNT_SID")
             auth_token = ensure_env("TWILIO_AUTH_TOKEN")
@@ -1114,6 +1390,43 @@ def do_pool_sync(args: argparse.Namespace, pool_store: PoolStore, logger: loggin
     return 0
 
 
+def do_pool_purge_without_sms(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
+    auto_confirm = bool(getattr(args, "yes", False))
+
+    if not auto_confirm:
+        print(
+            "Cette action va supprimer du pool (et libérer chez Twilio) tous les numéros sans capacité SMS."
+            "\nOpération irréversible et potentiellement facturante côté Twilio."
+        )
+        confirm = input("Confirmer la purge ? (o/N) : ").strip().lower()
+        if confirm not in {"o", "oui", "y", "yes"}:
+            logger.info("[yellow]POOL[/yellow] purge sans SMS annulée par l'utilisateur")
+            print("Purge annulée.\n")
+            return 0
+        auto_confirm = True
+
+    result = pool_store.purge_without_sms_capability(auto_confirm=auto_confirm)
+
+    print("\n--- Rapport purge numéros sans SMS ---")
+    print(f"vérifiés             : {result.get('checked', 0)}")
+    print(f"conservés (SMS OK)   : {len(result.get('kept_sms_capable', []) or [])}")
+    print(f"supprimés du pool    : {len(result.get('removed_from_pool', []) or [])}")
+    print(f"libérés chez Twilio  : {len(result.get('released_on_twilio', []) or [])}")
+    print(f"introuvables Twilio  : {len(result.get('missing_on_twilio', []) or [])}")
+    print(f"erreurs              : {len(result.get('errors', []) or [])}\n")
+
+    logger.info(
+        "[green]POOL[/green] purge sans SMS terminée checked=%s kept=%s removed=%s released=%s missing=%s errors=%s",
+        result.get("checked", 0),
+        len(result.get("kept_sms_capable", []) or []),
+        len(result.get("removed_from_pool", []) or []),
+        len(result.get("released_on_twilio", []) or []),
+        len(result.get("missing_on_twilio", []) or []),
+        len(result.get("errors", []) or []),
+    )
+    return 0
+
+
 # ✅ NEW: fix webhooks action
 def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
     dry_run = bool(getattr(args, "dry_run", True))
@@ -1130,30 +1443,43 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
         dry_run=dry_run,
         only_country=only_country,
         only_status=only_status,
+        fix_sms=True,
     )
 
     checked = int(result.get("checked", 0) or 0)
-    need_fix = result.get("need_fix", []) or []
-    fixed = result.get("fixed", []) or []
+    need_fix_voice = result.get("need_fix_voice", []) or []
+    need_fix_sms = result.get("need_fix_sms", []) or []
+    fixed_voice = result.get("fixed_voice", []) or []
+    fixed_sms = result.get("fixed_sms", []) or []
     not_found = result.get("not_found_on_twilio", []) or []
     errors = result.get("errors", []) or []
 
     print("\n--- Pool webhook fix report ---")
     print(f"dry_run              : {bool(result.get('dry_run', False))}")
     print(f"target_voice_url     : {result.get('target_voice_url', '')}")
+    print(f"target_sms_url       : {result.get('target_sms_url', '')}")
     print(f"checked              : {checked}")
-    print(f"need_fix             : {len(need_fix)}")
-    print(f"fixed                : {len(fixed)}")
+    print(f"need_fix_voice       : {len(need_fix_voice)}")
+    print(f"fixed_voice          : {len(fixed_voice)}")
+    print(f"need_fix_sms         : {len(need_fix_sms)}")
+    print(f"fixed_sms            : {len(fixed_sms)}")
     print(f"not_found_on_twilio  : {len(not_found)}")
     print(f"errors               : {len(errors)}")
 
     # Affichage détails (léger)
-    if need_fix:
-        print("\nNuméros à corriger (aperçu):")
-        for x in need_fix[:20]:
-            print(f"- {x.get('phone_number')} (current={x.get('current_voice_url','')})")
-        if len(need_fix) > 20:
-            print(f"... +{len(need_fix) - 20} autres")
+    if need_fix_voice:
+        print("\nNuméros à corriger (voice_url, aperçu):")
+        for x in need_fix_voice[:20]:
+            print(f"- {x.get('phone_number')} (current_voice={x.get('current_voice_url','')})")
+        if len(need_fix_voice) > 20:
+            print(f"... +{len(need_fix_voice) - 20} autres")
+
+    if need_fix_sms:
+        print("\nNuméros à corriger (sms_url, aperçu):")
+        for x in need_fix_sms[:20]:
+            print(f"- {x.get('phone_number')} (current_sms={x.get('current_sms_url','')})")
+        if len(need_fix_sms) > 20:
+            print(f"... +{len(need_fix_sms) - 20} autres")
 
     if not_found:
         print("\nNuméros introuvables côté Twilio (aperçu):")
@@ -1170,10 +1496,15 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
             print(f"... +{len(errors) - 20} autres")
 
     logger.info(
-        "[magenta]POOL[/magenta] fix_webhooks report checked=%s need_fix=%s fixed=%s dry_run=%s",
+        (
+            "[magenta]POOL[/magenta] fix_webhooks report checked=%s "
+            "need_fix_voice=%s need_fix_sms=%s fixed_voice=%s fixed_sms=%s dry_run=%s"
+        ),
         checked,
-        len(need_fix),
-        len(fixed),
+        len(need_fix_voice),
+        len(need_fix_sms),
+        len(fixed_voice),
+        len(fixed_sms),
         dry_run,
     )
     return 0
@@ -1200,6 +1531,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
     mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
+    mode.add_argument("--render", action="store_true", help="Mode RENDER (appels HTTP vers l'API Render).")
 
     p.epilog = "Astuce : lance simplement `python cli.py` et laisse-toi guider, aucun argument n'est requis."
 
@@ -1253,11 +1585,19 @@ def build_parser() -> argparse.ArgumentParser:
     c8 = sp.add_parser("pool-sync", help="Ajoute les numéros Twilio manquants dans TwilioPools.")
     c8.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation avant import.")
 
-    # ✅ NEW command: pool-fix-webhooks
-    c9 = sp.add_parser("pool-fix-webhooks", help="Corrige voice_url sur les numéros Twilio listés dans TwilioPools.")
+    # ✅ Commande: correction voice + SMS webhooks
+    c9 = sp.add_parser(
+        "pool-fix-webhooks", help="Corrige voice_url et sms_url sur les numéros Twilio listés dans TwilioPools."
+    )
     c9.add_argument("--country", required=False, help="Filtrer par pays ISO (ex: FR).")
     c9.add_argument("--status", required=False, help="Filtrer par status (ex: available/assigned).")
     c9.add_argument("--apply", action="store_true", help="Appliquer les updates (sinon dry-run).")
+
+    c10 = sp.add_parser(
+        "pool-purge-sans-sms",
+        help="Purge le pool (et Twilio) de tous les numéros sans capacité SMS. Disponible en LIVE/RENDER.",
+    )
+    c10.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation avant suppression.")
 
     return p
 
@@ -1267,10 +1607,13 @@ def select_mode(args: argparse.Namespace) -> str:
         return "live"
     if args.mock:
         return "mock"
+    if getattr(args, "render", False):
+        return "render"
 
     print("Bienvenue ! Choisis le mode de démonstration :")
     print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
     print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
+    print("  3) Mode Render distant (appels HTTP vers l'API hébergée)")
 
     while True:
         user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
@@ -1278,12 +1621,17 @@ def select_mode(args: argparse.Namespace) -> str:
             return "mock"
         if user_choice == "2":
             return "live"
-        print("Merci de répondre par 1 ou 2.")
+        if user_choice == "3":
+            return "render"
+        print("Merci de répondre par 1, 2 ou 3.")
 
 
 def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
     if mode == "mock":
         return MockJsonStore(Path(args.fixtures), logger=logger)
+    if mode == "render":
+        api = make_render_api_client(logger)
+        return RenderClientStore(api, logger)
 
     sheet_name = ensure_env("GOOGLE_SHEET_NAME")
     sa_env = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
@@ -1305,6 +1653,9 @@ def make_pool_store(mode: str, args: argparse.Namespace, logger: logging.Logger)
     batch_size = int(os.getenv("TWILIO_POOL_SIZE", "2"))
     if mode == "mock":
         return MockPoolStore(Path(args.pools_fixtures), logger=logger, default_batch=batch_size)
+    if mode == "render":
+        api = make_render_api_client(logger)
+        return RenderPoolStore(api, logger)
     return LivePoolStore(logger=logger, default_batch=batch_size)
 
 
@@ -1468,7 +1819,8 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                     print("  2) Approvisionner le pool")
                     print("  3) Attribuer un numéro du pool à un client")
                     print("  4) Vérifier et compléter TwilioPools avec les numéros Twilio")
-                    print("  5) Fixer voice_url (webhook) sur les numéros du pool (LIVE)")
+                    print("  5) Fixer voice_url et sms_url sur les numéros du pool (LIVE/RENDER)")
+                    print("  6) Purger les numéros sans capacité SMS (LIVE/RENDER)")
                     print("  0) Retour au menu principal")
                     pool_choice = input("Votre sélection : ").strip() or "0"
 
@@ -1529,10 +1881,6 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         continue
 
                     if pool_choice == "5":
-                        if args.mode != "live":
-                            print("Cette action est disponible uniquement en mode LIVE.\n")
-                            continue
-
                         country = input("Filtrer par pays ISO (ex: FR) [vide=all] : ").strip().upper() or ""
                         status = input("Filtrer par status (available/assigned) [vide=all] : ").strip().lower() or ""
                         apply = (input("Appliquer les updates ? (o/N) : ").strip().lower() or "n") in {"o", "oui", "y", "yes"}
@@ -1552,7 +1900,15 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             print(colorize(f"\n❌ {exc}\n", "red"))
                         continue
 
-                    print("Merci de choisir 0, 1, 2, 3, 4 ou 5.\n")
+                    if pool_choice == "6":
+                        try:
+                            do_pool_purge_without_sms(argparse.Namespace(yes=False), pool_store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur purge sans SMS: %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
+                        continue
+
+                    print("Merci de choisir 0, 1, 2, 3, 4, 5 ou 6.\n")
                 continue
 
             logger.warning("Choix inconnu: %s", choice)
@@ -1567,14 +1923,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    load_env_files()
-
-    mode = select_mode(args)
-    args.mode = mode
-
     # ✅ New: Rich logging config (color + redaction). Verbose => DEBUG.
     configure_cli_logging(verbose=bool(args.verbose or str(args.log_level).upper() == "DEBUG"))
     logger = logging.getLogger(__name__)
+
+    loaded_envs = load_env_files()
+    if loaded_envs:
+        logger.debug(
+            "Fichiers d'environnement chargés: %s",
+            ", ".join(str(p) for p in loaded_envs),
+        )
+    else:
+        logger.warning(
+            "Aucun fichier .env/.env.render trouvé : utilisation exclusive des variables d'environnement"
+        )
+
+    mode = select_mode(args)
+    args.mode = mode
 
     try:
         store = make_store(mode, args, logger)
@@ -1603,6 +1968,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "pool-fix-webhooks":
             args.dry_run = not bool(getattr(args, "apply", False))
             return do_pool_fix_webhooks(args, pool_store, logger)
+        if args.cmd == "pool-purge-sans-sms":
+            return do_pool_purge_without_sms(args, pool_store, logger)
 
         raise ValidationError("Commande inconnue.")
 

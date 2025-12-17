@@ -6,3 +6,4 @@ google-auth
 python-dotenv
 pytest
 rich
+httpx
