@@ -6,7 +6,7 @@ services:
     plan: pro
     region: frankfurt
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "ls -al && echo PORT=$PORT && python -m app.run"
+    startCommand: "python -m app.run"
     envVars:
       - key: PUBLIC_BASE_URL
         sync: false  # à renseigner dans le dashboard (Render fournit RENDER_EXTERNAL_URL)
