@@ -10,7 +10,7 @@ Ce guide résume la mise en production de ProxyCall sur Render (API FastAPI) ain
 ## 2. Blueprint Render (`render.yaml`)
 Le fichier `render.yaml` à la racine définit un service web Python sur un plan **pro** Render en région **frankfurt** pour disposer de ressources accrues :
 - Installation via `pip install -r requirements.txt`.
-- Lancement via `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (Render expose automatiquement `$PORT`).
+- Lancement via `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (Render expose automatiquement `$PORT`). **Ne pas ajouter de ponctuation après `$PORT`** : un point final entraînerait l'erreur Render `Invalid value for '--port': '10000.' is not a valid integer`.
 - Variables d'environnement attendues : `PUBLIC_BASE_URL` (ou `RENDER_EXTERNAL_URL`), identifiants Twilio, paramètres de pool (`TWILIO_PHONE_COUNTRY`, `TWILIO_NUMBER_TYPE`, `TWILIO_POOL_SIZE`) et Google (`GOOGLE_SHEET_NAME`, `GOOGLE_SERVICE_ACCOUNT_FILE`).
 - Le secret JSON Google peut être chargé comme *secret file* et monté à l'emplacement `/etc/secrets/google-credentials.json` pour rester hors du dépôt.
 
