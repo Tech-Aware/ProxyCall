@@ -248,6 +248,9 @@ class PoolStore:
     ) -> dict[str, Any]:
         raise NotImplementedError
 
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class RenderAPIClient:
     def __init__(self, base_url: str, token: str | None, logger: logging.Logger):
@@ -346,6 +349,9 @@ class RenderAPIClient:
             "/pool/fix-webhooks",
             json_body={"dry_run": dry_run, "only_country": only_country, "only_status": only_status},
         )
+
+    def pool_purge_without_sms(self) -> dict[str, Any]:
+        return self._request("POST", "/pool/purge-sans-sms")
 
 
 class MockJsonStore(ClientStore):
@@ -652,6 +658,9 @@ class MockPoolStore(PoolStore):
     ) -> dict[str, Any]:
         raise ValidationError("Correction des webhooks disponible uniquement en mode LIVE.")
 
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        raise ValidationError("Purge SMS disponible uniquement en mode LIVE.")
+
 
 class LivePoolStore(PoolStore):
     def __init__(self, logger: logging.Logger, *, default_batch: int = 2):
@@ -713,6 +722,24 @@ class LivePoolStore(PoolStore):
             len(result.get("need_fix", []) or []),
             len(result.get("fixed", []) or []),
             bool(result.get("dry_run", False)),
+        )
+        return result
+
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        from integrations.twilio_client import TwilioClient
+
+        if not auto_confirm:
+            raise ValidationError("Confirmation requise pour purger les numéros sans SMS (auto_confirm=False).")
+
+        result = TwilioClient.purge_pool_without_sms_capability()
+        self.logger.info(
+            "[magenta]POOL[/magenta] purge sans SMS réalisée checked=%s kept=%s removed=%s released=%s missing=%s errors=%s",
+            result.get("checked", 0),
+            len(result.get("kept_sms_capable", []) or []),
+            len(result.get("removed_from_pool", []) or []),
+            len(result.get("released_on_twilio", []) or []),
+            len(result.get("missing_on_twilio", []) or []),
+            len(result.get("errors", []) or []),
         )
         return result
 
@@ -815,6 +842,19 @@ class RenderPoolStore(PoolStore):
         only_status: str | None = None,
     ) -> dict[str, Any]:
         return self.api.pool_fix_webhooks(dry_run=dry_run, only_country=only_country, only_status=only_status)
+
+    def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
+        if not auto_confirm:
+            raise ValidationError("Confirmation requise pour purger les numéros sans SMS (auto_confirm=False).")
+        data = self.api.pool_purge_without_sms()
+        self.logger.info(
+            "[magenta]POOL[/magenta] render purge sans SMS checked=%s kept=%s removed=%s released=%s",
+            data.get("checked", 0),
+            len(data.get("kept_sms_capable", []) or []),
+            len(data.get("removed_from_pool", []) or []),
+            len(data.get("released_on_twilio", []) or []),
+        )
+        return data
 
 
 class SheetsStore(ClientStore):
@@ -1327,6 +1367,43 @@ def do_pool_sync(args: argparse.Namespace, pool_store: PoolStore, logger: loggin
     return 0
 
 
+def do_pool_purge_without_sms(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
+    auto_confirm = bool(getattr(args, "yes", False))
+
+    if not auto_confirm:
+        print(
+            "Cette action va supprimer du pool (et libérer chez Twilio) tous les numéros sans capacité SMS."
+            "\nOpération irréversible et potentiellement facturante côté Twilio."
+        )
+        confirm = input("Confirmer la purge ? (o/N) : ").strip().lower()
+        if confirm not in {"o", "oui", "y", "yes"}:
+            logger.info("[yellow]POOL[/yellow] purge sans SMS annulée par l'utilisateur")
+            print("Purge annulée.\n")
+            return 0
+        auto_confirm = True
+
+    result = pool_store.purge_without_sms_capability(auto_confirm=auto_confirm)
+
+    print("\n--- Rapport purge numéros sans SMS ---")
+    print(f"vérifiés             : {result.get('checked', 0)}")
+    print(f"conservés (SMS OK)   : {len(result.get('kept_sms_capable', []) or [])}")
+    print(f"supprimés du pool    : {len(result.get('removed_from_pool', []) or [])}")
+    print(f"libérés chez Twilio  : {len(result.get('released_on_twilio', []) or [])}")
+    print(f"introuvables Twilio  : {len(result.get('missing_on_twilio', []) or [])}")
+    print(f"erreurs              : {len(result.get('errors', []) or [])}\n")
+
+    logger.info(
+        "[green]POOL[/green] purge sans SMS terminée checked=%s kept=%s removed=%s released=%s missing=%s errors=%s",
+        result.get("checked", 0),
+        len(result.get("kept_sms_capable", []) or []),
+        len(result.get("removed_from_pool", []) or []),
+        len(result.get("released_on_twilio", []) or []),
+        len(result.get("missing_on_twilio", []) or []),
+        len(result.get("errors", []) or []),
+    )
+    return 0
+
+
 # ✅ NEW: fix webhooks action
 def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger: logging.Logger) -> int:
     dry_run = bool(getattr(args, "dry_run", True))
@@ -1472,6 +1549,12 @@ def build_parser() -> argparse.ArgumentParser:
     c9.add_argument("--country", required=False, help="Filtrer par pays ISO (ex: FR).")
     c9.add_argument("--status", required=False, help="Filtrer par status (ex: available/assigned).")
     c9.add_argument("--apply", action="store_true", help="Appliquer les updates (sinon dry-run).")
+
+    c10 = sp.add_parser(
+        "pool-purge-sans-sms",
+        help="Purge le pool (et Twilio) de tous les numéros sans capacité SMS. Disponible en LIVE/RENDER.",
+    )
+    c10.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation avant suppression.")
 
     return p
 
@@ -1694,6 +1777,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                     print("  3) Attribuer un numéro du pool à un client")
                     print("  4) Vérifier et compléter TwilioPools avec les numéros Twilio")
                     print("  5) Fixer voice_url (webhook) sur les numéros du pool (LIVE)")
+                    print("  6) Purger les numéros sans capacité SMS (LIVE/RENDER)")
                     print("  0) Retour au menu principal")
                     pool_choice = input("Votre sélection : ").strip() or "0"
 
@@ -1777,7 +1861,15 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                             print(colorize(f"\n❌ {exc}\n", "red"))
                         continue
 
-                    print("Merci de choisir 0, 1, 2, 3, 4 ou 5.\n")
+                    if pool_choice == "6":
+                        try:
+                            do_pool_purge_without_sms(argparse.Namespace(yes=False), pool_store, logger)
+                        except CLIError as exc:
+                            logger.error("Erreur purge sans SMS: %s", exc)
+                            print(colorize(f"\n❌ {exc}\n", "red"))
+                        continue
+
+                    print("Merci de choisir 0, 1, 2, 3, 4, 5 ou 6.\n")
                 continue
 
             logger.warning("Choix inconnu: %s", choice)
@@ -1837,6 +1929,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "pool-fix-webhooks":
             args.dry_run = not bool(getattr(args, "apply", False))
             return do_pool_fix_webhooks(args, pool_store, logger)
+        if args.cmd == "pool-purge-sans-sms":
+            return do_pool_purge_without_sms(args, pool_store, logger)
 
         raise ValidationError("Commande inconnue.")
 
