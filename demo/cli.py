@@ -1073,12 +1073,17 @@ def ensure_env(var: str) -> str:
 
 
 def load_env_files() -> list[Path]:
-    """Charge .env.render puis .env afin de préparer la CLI pour Render."""
+    """Charge .env puis .env.render afin de préparer la CLI pour Render."""
 
     loaded: list[Path] = []
     repo_root = Path(__file__).resolve().parent.parent
 
-    for filename in (".env.render", ".env"):
+    # 📌 Ordre d'écrasement :
+    #  - on charge d'abord .env (dev local)
+    #  - puis .env.render qui doit prévaloir quand on cible Render
+    # Cet ordre évite qu'une ancienne config locale (ex: URL ngrok) n'écrase
+    # l'URL publique renseignée dans .env.render.
+    for filename in (".env", ".env.render"):
         repo_env = repo_root / filename
         if repo_env.exists():
             load_dotenv(repo_env, override=True)
