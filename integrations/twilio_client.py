@@ -802,6 +802,104 @@ class TwilioClient:
         return numbers
 
     @classmethod
+    def purge_pool_without_sms_capability(cls) -> dict[str, object]:
+        """Supprime du pool (et de Twilio) les numéros sans capacité SMS."""
+
+        records = PoolsRepository.list_all()
+
+        checked = 0
+        kept: list[str] = []
+        released: list[str] = []
+        removed_from_pool: list[str] = []
+        missing_on_twilio: list[str] = []
+        errors: list[dict[str, str]] = []
+
+        logger.info(
+            "[magenta]POOL[/magenta] purge des numéros sans SMS start records=%s",
+            len(records),
+        )
+
+        for rec in records:
+            phone = cls._normalize_phone_number(rec.get("phone_number"))
+            if not phone:
+                continue
+
+            checked += 1
+            try:
+                incoming = twilio.incoming_phone_numbers.list(phone_number=phone, limit=1)
+                if not incoming:
+                    logger.warning(
+                        "[magenta]POOL[/magenta] numéro introuvable côté Twilio => ignoré",
+                        extra={"phone": mask_phone(phone)},
+                    )
+                    missing_on_twilio.append(phone)
+                    continue
+
+                candidate = incoming[0]
+                capabilities = getattr(candidate, "capabilities", {}) or {}
+                has_sms = bool(capabilities.get("sms")) or bool(
+                    getattr(candidate, "sms_enabled", False)
+                )
+
+                if has_sms:
+                    kept.append(phone)
+                    logger.info(
+                        "[magenta]POOL[/magenta] conservation du numéro (SMS OK)",
+                        extra={"phone": mask_phone(phone)},
+                    )
+                    continue
+
+                logger.info(
+                    "[magenta]POOL[/magenta] numéro sans SMS -> suppression",
+                    extra={"phone": mask_phone(phone)},
+                )
+
+                removed = PoolsRepository.remove_number(phone)
+                if removed:
+                    removed_from_pool.append(phone)
+                else:
+                    errors.append({"phone_number": phone, "err": "Suppression pool échouée"})
+
+                try:
+                    candidate.delete()
+                    released.append(phone)
+                    logger.info(
+                        "[cyan]Twilio[/cyan] numéro libéré côté Twilio",
+                        extra={"phone": mask_phone(phone)},
+                    )
+                except Exception as exc:  # pragma: no cover - dépendances externes
+                    errors.append({"phone_number": phone, "err": str(exc)})
+                    logger.exception(
+                        "[red]Twilio[/red] échec de libération du numéro", exc_info=exc
+                    )
+
+            except Exception as exc:  # pragma: no cover - dépendances externes
+                errors.append({"phone_number": phone, "err": str(exc)})
+                logger.exception(
+                    "[magenta]POOL[/magenta] purge: erreur inattendue", exc_info=exc
+                )
+
+        logger.info(
+            "[magenta]POOL[/magenta] purge terminée checked=%s kept=%s removed=%s released=%s missing_twilio=%s errors=%s",
+            checked,
+            len(kept),
+            len(removed_from_pool),
+            len(released),
+            len(missing_on_twilio),
+            len(errors),
+        )
+
+        return {
+            "checked": checked,
+            "kept_sms_capable": kept,
+            "removed_from_pool": removed_from_pool,
+            "released_on_twilio": released,
+            "missing_on_twilio": missing_on_twilio,
+            "errors": errors,
+            "ts": datetime.utcnow().isoformat(),
+        }
+
+    @classmethod
     def sync_twilio_numbers_with_sheet(
         cls,
         *,
