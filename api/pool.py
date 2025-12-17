@@ -95,10 +95,14 @@ def fix_webhooks(
     dry_run: bool = Body(True),
     only_country: str | None = Body(None),
     only_status: str | None = Body(None),
+    fix_sms: bool = Body(True),
 ):
     try:
         result = TwilioClient.fix_pool_voice_webhooks(
-            dry_run=dry_run, only_country=only_country, only_status=only_status
+            dry_run=dry_run,
+            only_country=only_country,
+            only_status=only_status,
+            fix_sms=fix_sms,
         )
         return result
     except Exception as exc:  # pragma: no cover - dépendances externes

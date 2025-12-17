@@ -245,6 +245,7 @@ class PoolStore:
         dry_run: bool = True,
         only_country: str | None = None,
         only_status: str | None = None,
+        fix_sms: bool = True,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -343,11 +344,23 @@ class RenderAPIClient:
     def pool_sync(self, apply: bool = True) -> dict[str, Any]:
         return self._request("POST", "/pool/sync", json_body={"apply": apply})
 
-    def pool_fix_webhooks(self, *, dry_run: bool = True, only_country: str | None = None, only_status: str | None = None) -> dict[str, Any]:
+    def pool_fix_webhooks(
+        self,
+        *,
+        dry_run: bool = True,
+        only_country: str | None = None,
+        only_status: str | None = None,
+        fix_sms: bool = True,
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             "/pool/fix-webhooks",
-            json_body={"dry_run": dry_run, "only_country": only_country, "only_status": only_status},
+            json_body={
+                "dry_run": dry_run,
+                "only_country": only_country,
+                "only_status": only_status,
+                "fix_sms": fix_sms,
+            },
         )
 
     def pool_purge_without_sms(self) -> dict[str, Any]:
@@ -709,18 +722,22 @@ class LivePoolStore(PoolStore):
         dry_run: bool = True,
         only_country: str | None = None,
         only_status: str | None = None,
+        fix_sms: bool = True,
     ) -> dict[str, Any]:
         from integrations.twilio_client import TwilioClient
         result = TwilioClient.fix_pool_voice_webhooks(
             dry_run=dry_run,
             only_country=only_country,
             only_status=only_status,
+            fix_sms=fix_sms,
         )
         self.logger.info(
-            "[magenta]POOL[/magenta] fix_webhooks done checked=%s need_fix=%s fixed=%s dry_run=%s",
+            "[magenta]POOL[/magenta] fix_webhooks done checked=%s need_fix_voice=%s fixed_voice=%s need_fix_sms=%s fixed_sms=%s dry_run=%s",
             result.get("checked", 0),
-            len(result.get("need_fix", []) or []),
-            len(result.get("fixed", []) or []),
+            len(result.get("need_fix_voice", []) or []),
+            len(result.get("fixed_voice", []) or []),
+            len(result.get("need_fix_sms", []) or []),
+            len(result.get("fixed_sms", []) or []),
             bool(result.get("dry_run", False)),
         )
         return result
@@ -840,8 +857,14 @@ class RenderPoolStore(PoolStore):
         dry_run: bool = True,
         only_country: str | None = None,
         only_status: str | None = None,
+        fix_sms: bool = True,
     ) -> dict[str, Any]:
-        return self.api.pool_fix_webhooks(dry_run=dry_run, only_country=only_country, only_status=only_status)
+        return self.api.pool_fix_webhooks(
+            dry_run=dry_run,
+            only_country=only_country,
+            only_status=only_status,
+            fix_sms=fix_sms,
+        )
 
     def purge_without_sms_capability(self, *, auto_confirm: bool = False) -> dict[str, Any]:
         if not auto_confirm:
@@ -1420,30 +1443,43 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
         dry_run=dry_run,
         only_country=only_country,
         only_status=only_status,
+        fix_sms=True,
     )
 
     checked = int(result.get("checked", 0) or 0)
-    need_fix = result.get("need_fix", []) or []
-    fixed = result.get("fixed", []) or []
+    need_fix_voice = result.get("need_fix_voice", []) or []
+    need_fix_sms = result.get("need_fix_sms", []) or []
+    fixed_voice = result.get("fixed_voice", []) or []
+    fixed_sms = result.get("fixed_sms", []) or []
     not_found = result.get("not_found_on_twilio", []) or []
     errors = result.get("errors", []) or []
 
     print("\n--- Pool webhook fix report ---")
     print(f"dry_run              : {bool(result.get('dry_run', False))}")
     print(f"target_voice_url     : {result.get('target_voice_url', '')}")
+    print(f"target_sms_url       : {result.get('target_sms_url', '')}")
     print(f"checked              : {checked}")
-    print(f"need_fix             : {len(need_fix)}")
-    print(f"fixed                : {len(fixed)}")
+    print(f"need_fix_voice       : {len(need_fix_voice)}")
+    print(f"fixed_voice          : {len(fixed_voice)}")
+    print(f"need_fix_sms         : {len(need_fix_sms)}")
+    print(f"fixed_sms            : {len(fixed_sms)}")
     print(f"not_found_on_twilio  : {len(not_found)}")
     print(f"errors               : {len(errors)}")
 
     # Affichage détails (léger)
-    if need_fix:
-        print("\nNuméros à corriger (aperçu):")
-        for x in need_fix[:20]:
-            print(f"- {x.get('phone_number')} (current={x.get('current_voice_url','')})")
-        if len(need_fix) > 20:
-            print(f"... +{len(need_fix) - 20} autres")
+    if need_fix_voice:
+        print("\nNuméros à corriger (voice_url, aperçu):")
+        for x in need_fix_voice[:20]:
+            print(f"- {x.get('phone_number')} (current_voice={x.get('current_voice_url','')})")
+        if len(need_fix_voice) > 20:
+            print(f"... +{len(need_fix_voice) - 20} autres")
+
+    if need_fix_sms:
+        print("\nNuméros à corriger (sms_url, aperçu):")
+        for x in need_fix_sms[:20]:
+            print(f"- {x.get('phone_number')} (current_sms={x.get('current_sms_url','')})")
+        if len(need_fix_sms) > 20:
+            print(f"... +{len(need_fix_sms) - 20} autres")
 
     if not_found:
         print("\nNuméros introuvables côté Twilio (aperçu):")
@@ -1544,8 +1580,10 @@ def build_parser() -> argparse.ArgumentParser:
     c8 = sp.add_parser("pool-sync", help="Ajoute les numéros Twilio manquants dans TwilioPools.")
     c8.add_argument("--yes", action="store_true", help="Ne pas demander de confirmation avant import.")
 
-    # ✅ NEW command: pool-fix-webhooks
-    c9 = sp.add_parser("pool-fix-webhooks", help="Corrige voice_url sur les numéros Twilio listés dans TwilioPools.")
+    # ✅ Commande: correction voice + SMS webhooks
+    c9 = sp.add_parser(
+        "pool-fix-webhooks", help="Corrige voice_url et sms_url sur les numéros Twilio listés dans TwilioPools."
+    )
     c9.add_argument("--country", required=False, help="Filtrer par pays ISO (ex: FR).")
     c9.add_argument("--status", required=False, help="Filtrer par status (ex: available/assigned).")
     c9.add_argument("--apply", action="store_true", help="Appliquer les updates (sinon dry-run).")
@@ -1776,7 +1814,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                     print("  2) Approvisionner le pool")
                     print("  3) Attribuer un numéro du pool à un client")
                     print("  4) Vérifier et compléter TwilioPools avec les numéros Twilio")
-                    print("  5) Fixer voice_url (webhook) sur les numéros du pool (LIVE)")
+                    print("  5) Fixer voice_url et sms_url sur les numéros du pool (LIVE/RENDER)")
                     print("  6) Purger les numéros sans capacité SMS (LIVE/RENDER)")
                     print("  0) Retour au menu principal")
                     pool_choice = input("Votre sélection : ").strip() or "0"
@@ -1838,10 +1876,6 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         continue
 
                     if pool_choice == "5":
-                        if args.mode != "live":
-                            print("Cette action est disponible uniquement en mode LIVE.\n")
-                            continue
-
                         country = input("Filtrer par pays ISO (ex: FR) [vide=all] : ").strip().upper() or ""
                         status = input("Filtrer par status (available/assigned) [vide=all] : ").strip().lower() or ""
                         apply = (input("Appliquer les updates ? (o/N) : ").strip().lower() or "n") in {"o", "oui", "y", "yes"}
