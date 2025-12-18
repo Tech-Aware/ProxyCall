@@ -19,8 +19,8 @@ from demo.cli import (
     do_create_client,
     do_lookup,
     do_simulate_call,
-    setup_logging,
 )
+from app.cli_logging import configure_cli_logging
 
 
 LOGGER = logging.getLogger("proxycall.demo.scenarios")
@@ -44,7 +44,11 @@ def _capture_stdout() -> io.StringIO:
 
 def _build_logger(ctx: Dict[str, Any]) -> logging.Logger:
     try:
-        return setup_logging("INFO", json_logs=False, ctx=ctx)
+        configure_cli_logging(verbose=False)
+        logger_name = f"proxycall.demo.scenario.{ctx.get('scenario', 'default')}"
+        logger = logging.getLogger(logger_name)
+        logger.info("Logger prêt pour le scénario (%s).", ctx.get("scenario", "n/a"))
+        return logger
     except Exception as exc:  # pragma: no cover - défensif
         LOGGER.exception("Échec configuration des logs de scénario: %s", exc)
         raise
@@ -67,24 +71,24 @@ def run_mock_client_journey(fixtures_path: Path | str = Path("demo/fixtures/clie
             client_id=1,
             name="Client Démo",
             client_mail="demo@example.com",
-            client_real_phone=33123456789,
+            client_real_phone="+33123456789",
             mode="mock",
         )
         with _capture_stdout() as buf_create:
             do_create_client(args_create, store, logger)
         outputs["create_client"] = buf_create.getvalue().strip()
 
-        args_lookup = argparse.Namespace(proxy=33900000000)
+        args_lookup = argparse.Namespace(proxy="+33900000000")
         with _capture_stdout() as buf_lookup:
             do_lookup(args_lookup, store, logger)
         outputs["lookup"] = buf_lookup.getvalue().strip()
 
-        args_call_ok = argparse.Namespace(from_number=33111111111, to_number=33900000000)
+        args_call_ok = argparse.Namespace(from_number="+33111111111", to_number="+33900000000")
         with _capture_stdout() as buf_call_ok:
             do_simulate_call(args_call_ok, store, logger)
         outputs["simulate_call_same_country"] = buf_call_ok.getvalue().strip()
 
-        args_call_block = argparse.Namespace(from_number=442222222222, to_number=33900000000)
+        args_call_block = argparse.Namespace(from_number="+442222222222", to_number="+33900000000")
         with _capture_stdout() as buf_call_block:
             do_simulate_call(args_call_block, store, logger)
         outputs["simulate_call_other_country"] = buf_call_block.getvalue().strip()
@@ -102,10 +106,16 @@ def run_mock_client_journey(fixtures_path: Path | str = Path("demo/fixtures/clie
 def cli_command_examples(fixtures_path: Path | str = Path("demo/fixtures/clients.json")) -> List[str]:
     """Fournit la commande unique pour lancer le menu interactif."""
     try:
-        path_str = str(fixtures_path)
-        LOGGER.info("Commande de lancement CLI (fixtures=%s).", path_str)
-        base = f"python -m demo.cli --mock --fixtures {path_str}"
-        return [f"{base}  # puis répondre 1/2/3/4 dans le menu interactif"]
+        LOGGER.info(
+            "Commande de lancement CLI en mode Render par défaut (prévoir .env.render)."
+        )
+        base = "python -m demo.cli"
+        return [
+            (
+                f"{base}  # mode Render par défaut ; configure PUBLIC_BASE_URL dans .env.render "
+                "avant de répondre au menu"
+            )
+        ]
     except Exception as exc:
         LOGGER.exception("Impossible de préparer la commande de démo: %s", exc)
         raise
