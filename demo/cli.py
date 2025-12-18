@@ -825,21 +825,31 @@ class RenderClientStore(ClientStore):
 
     def get_by_id(self, client_id: str | int) -> Optional[DemoClient]:
         cid = str(parse_client_id(client_id))
-        if cid in self._cache:
-            return self._cache[cid]
         try:
             data = self.api.get_client(cid)
+            client = self._to_demo_client(data)
+            self._cache[cid] = client
+            return client
         except ExternalServiceError as exc:
             status = exc.details.get("status") if isinstance(exc, ExternalServiceError) else None
             if status == 404:
                 self.logger.warning(
                     "[red]RENDER[/red] client %s introuvable (404).", cid
                 )
+                self._cache.pop(cid, None)
                 return None
+
+            self.logger.error(
+                "[red]RENDER[/red] échec de rafraîchissement du client %s : %s", cid, exc
+            )
+            if cid in self._cache:
+                self.logger.info(
+                    "[yellow]RENDER[/yellow] utilisation du cache local pour le client %s après erreur réseau.",
+                    cid,
+                )
+                return self._cache[cid]
+
             raise
-        client = self._to_demo_client(data)
-        self._cache[cid] = client
-        return client
 
     def get_by_proxy(self, proxy_number: str | int) -> Optional[DemoClient]:
         proxy = normalize_phone_digits(proxy_number, label="proxy")
