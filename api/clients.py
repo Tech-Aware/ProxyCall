@@ -5,6 +5,19 @@ from services.clients_service import ClientsService, ClientAlreadyExistsError
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
+@router.get("/next-id")
+def get_next_client_id():
+    try:
+        next_id = ClientsService.get_next_client_id()
+    except Exception as exc:
+        logger.exception(
+            "Erreur lors du calcul du prochain client_id", exc_info=exc
+        )
+        raise HTTPException(status_code=500, detail="Erreur calcul client_id")
+
+    return {"next_client_id": next_id}
+
 @router.get("/{client_id}")
 def get_client(client_id: str):
     client = ClientsService.get_client(client_id)
@@ -39,19 +52,6 @@ def get_client_by_proxy(proxy: str):
         "client_country_code": client.client_country_code,
         "client_last_caller": client.client_last_caller,
     }
-
-
-@router.get("/next-id")
-def get_next_client_id():
-    try:
-        next_id = ClientsService.get_next_client_id()
-    except Exception as exc:
-        logger.exception("Erreur lors du calcul du prochain client_id", exc_info=exc)
-        raise HTTPException(status_code=500, detail="Erreur calcul client_id")
-
-    return {"next_client_id": next_id}
-
-
 @router.post("")
 def create_client(
     client_id: str = Body(...),

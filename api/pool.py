@@ -1,10 +1,15 @@
 import logging
 from fastapi import APIRouter, HTTPException, Body
+from pydantic import BaseModel
 
 from integrations.twilio_client import TwilioClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class SyncPoolPayload(BaseModel):
+    apply: bool = True
 
 
 @router.get("/available")
@@ -69,16 +74,15 @@ def assign(
 
 
 @router.post("/sync")
-def sync_pool(apply: bool | dict = Body(True)):
+def sync_pool(payload: bool | SyncPoolPayload = Body(True)):
     try:
-        apply_bool = apply
-        if isinstance(apply, dict):
-            apply_bool = apply.get("apply", True)
-
-        result = TwilioClient.sync_twilio_numbers_with_sheet(apply=bool(apply_bool))
+        apply_bool = payload.apply if isinstance(payload, SyncPoolPayload) else bool(payload)
+        result = TwilioClient.sync_twilio_numbers_with_sheet(apply=apply_bool)
         return result
     except Exception as exc:  # pragma: no cover - dépendances externes
-        logger.exception("Erreur de synchronisation Twilio/Sheets", exc_info=exc)
+        logger.exception(
+            "Erreur de synchronisation Twilio/Sheets (apply=%s)", apply_bool, exc_info=exc
+        )
         raise HTTPException(status_code=500, detail="Erreur sync pool") from exc
 
 
