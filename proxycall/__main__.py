@@ -9,5 +9,10 @@ def entrypoint() -> int:
     return main()
 
 
+def entrypoint_live() -> int:
+    """Exécute la CLI directement en mode Dev (live)."""
+    return main(["--live"])
+
+
 if __name__ == "__main__":
     raise SystemExit(entrypoint())

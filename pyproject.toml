@@ -22,6 +22,7 @@ dev = ["build>=1.0"]
 
 [project.scripts]
 proxycall-cli = "proxycall.__main__:entrypoint"
+proxycall-cli-live = "proxycall.__main__:entrypoint_live"
 
 [project.urls]
 Homepage = "https://github.com/user/project"

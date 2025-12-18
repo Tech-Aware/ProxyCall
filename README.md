@@ -69,10 +69,11 @@ Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./r
 
 Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render pour l'URL/token uniquement) sont décrits dans `docs/deploiement_render.md`.
 
-Pour consommer le backend depuis n'importe quel poste (ex. Windows), lancez la CLI avec `--render` afin d'envoyer les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN`.
+Pour consommer le backend depuis n'importe quel poste (ex. Windows), la CLI envoie par défaut les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN` (mode Render par défaut, basé sur `.env.render`).
 
 ### Distribution légère de la CLI
 - Construire le bundle : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
 - Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
-- Utilisation : `python -m proxycall --render ...` ou via le binaire installé `proxycall-cli --render ...`.
+- Utilisation (Render par défaut) : `proxycall-cli ...` ou `python -m proxycall ...` ; aucune option n'est requise pour cibler Render.
+- Mode Dev (Twilio/Google) : utilisez le binaire `proxycall-cli-live` (ou l'option `--live`) et fournissez les variables Twilio/Google via `.env` ou l'environnement.
 - La CLI charge automatiquement `.env` puis `.env.render` à partir du répertoire courant ou de ses parents (résolution `find_dotenv`), sans dépendre de la racine du dépôt.

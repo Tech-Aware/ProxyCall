@@ -1626,26 +1626,20 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
 # CLI wiring
 # =========================
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="proxycall-demo", description="ProxyCall DEMO CLI (mock/live)")
+    p = argparse.ArgumentParser(
+        prog="proxycall-cli",
+        description="ProxyCall CLI (Render par défaut, mode Dev via binaire dédié)",
+    )
     p.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="DEBUG, INFO, WARNING, ERROR")
     p.add_argument("--verbose", action="store_true", help="Affiche les stack traces en cas d’erreur.")
-    p.add_argument(
-        "--fixtures",
-        default=str((Path(__file__).parent / "fixtures" / "clients.json").resolve()),
-        help="Chemin fixtures JSON (mode mock).",
-    )
-    p.add_argument(
-        "--pools-fixtures",
-        default=str(POOL_FIXTURES_DEFAULT.resolve()),
-        help="Chemin fixtures pool (mode mock).",
-    )
 
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
-    mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
-    mode.add_argument("--render", action="store_true", help="Mode RENDER (appels HTTP vers l'API Render).")
+    # Mode Dev (ex-live) accessible via le binaire `proxycall-cli-live` ou l’option --live
+    p.add_argument("--live", action="store_true", help="Mode Dev (Twilio + Google Sheets).")
 
-    p.epilog = "Astuce : lance simplement `python cli.py` et laisse-toi guider, aucun argument n'est requis."
+    p.epilog = (
+        "Astuce : `proxycall-cli` utilise Render par défaut. "
+        "Utilisez `proxycall-cli-live` ou `--live` pour le mode Dev (Twilio/Google)."
+    )
 
     sp = p.add_subparsers(dest="cmd", required=False)
 
@@ -1715,27 +1709,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def select_mode(args: argparse.Namespace) -> str:
-    if args.live:
+    if getattr(args, "live", False):
+        logging.getLogger(__name__).info(
+            "Mode Dev sélectionné (Twilio/Google requis, variables .env nécessaires)."
+        )
         return "live"
-    if args.mock:
-        return "mock"
-    if getattr(args, "render", False):
-        return "render"
 
-    print("Bienvenue ! Choisis le mode de démonstration :")
-    print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
-    print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
-    print("  3) Mode Render distant (appels HTTP vers l'API hébergée)")
-
-    while True:
-        user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
-        if user_choice == "1":
-            return "mock"
-        if user_choice == "2":
-            return "live"
-        if user_choice == "3":
-            return "render"
-        print("Merci de répondre par 1, 2 ou 3.")
+    logging.getLogger(__name__).info(
+        "Mode Render sélectionné par défaut (appel HTTP distant, .env.render attendu)."
+    )
+    return "render"
 
 
 def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
