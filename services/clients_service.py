@@ -118,6 +118,12 @@ class ClientsService:
             return None
 
     @staticmethod
+    def get_next_client_id() -> int:
+        """Retourne le prochain identifiant client disponible dans Sheets."""
+        max_id = ClientsRepository.get_max_client_id()
+        return max_id + 1
+
+    @staticmethod
     def create_client(
         client_id: str,
         client_name: str,

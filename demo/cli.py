@@ -310,6 +310,9 @@ class RenderAPIClient:
     def get_client_by_proxy(self, proxy: str) -> dict[str, Any]:
         return self._request("GET", f"/clients/by-proxy/{proxy}")
 
+    def get_next_client_id(self) -> dict[str, Any]:
+        return self._request("GET", "/clients/next-id")
+
     # --- Orders ---
     def create_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/orders", json_body=payload)
@@ -345,7 +348,7 @@ class RenderAPIClient:
         )
 
     def pool_sync(self, apply: bool = True) -> dict[str, Any]:
-        return self._request("POST", "/pool/sync", json_body=bool(apply))
+        return self._request("POST", "/pool/sync", json_body={"apply": bool(apply)})
 
     def pool_fix_webhooks(
         self,
@@ -868,7 +871,17 @@ class RenderClientStore(ClientStore):
         raise ExternalServiceError("Listing complet non exposé par l'API Render")
 
     def max_client_id(self) -> int:
-        raise ExternalServiceError("max_client_id indisponible en mode Render")
+        data = self.api.get_next_client_id()
+        next_id = data.get("next_client_id") if isinstance(data, dict) else None
+        if next_id is None:
+            raise ExternalServiceError("Réponse Render invalide: next_client_id manquant")
+
+        try:
+            next_id_int = int(next_id)
+        except (TypeError, ValueError) as exc:
+            raise ExternalServiceError("next_client_id non numérique dans la réponse Render") from exc
+
+        return max(0, next_id_int - 1)
 
 
 class RenderPoolStore(PoolStore):
@@ -1172,10 +1185,14 @@ def parse_client_id(value: str | int) -> int:
     return v_or_raise(int_strict, value, field="client_id", min_value=1)
 
 
-def compute_next_client_id(store: ClientStore) -> int:
+def compute_next_client_id(store: ClientStore, logger: logging.Logger) -> int:
     try:
         max_num = store.max_client_id()
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "[red]CLIENT[/red] impossible de récupérer le max client_id, fallback 0",
+            extra={"error": str(exc)},
+        )
         max_num = 0
     return max_num + 1
 
@@ -1184,7 +1201,7 @@ def do_create_client(args: argparse.Namespace, store: ClientStore, logger: loggi
     raw_id_val = getattr(args, "client_id", None)
     raw_id = str(raw_id_val).strip() if raw_id_val is not None else ""
     if not raw_id:
-        client_id = compute_next_client_id(store)
+        client_id = compute_next_client_id(store, logger)
         logger.info("[blue]CLI[/blue] auto client_id=%s", client_id)
     else:
         client_id = parse_client_id(raw_id_val)
@@ -1755,7 +1772,7 @@ def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: P
                         break
 
                     if sub_choice == "1":
-                        client_id = compute_next_client_id(store)
+                        client_id = compute_next_client_id(store, logger)
                         print(f"ID attribué automatiquement : {client_id}")
                         name = input("Nom client (ex: Client Démo) : ").strip() or "Client Démo"
                         client_mail = input("Email client (ex: demo@example.com) : ").strip() or "demo@example.com"

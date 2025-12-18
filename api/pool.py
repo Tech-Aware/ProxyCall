@@ -69,9 +69,13 @@ def assign(
 
 
 @router.post("/sync")
-def sync_pool(apply: bool = Body(True)):
+def sync_pool(apply: bool | dict = Body(True)):
     try:
-        result = TwilioClient.sync_twilio_numbers_with_sheet(apply=apply)
+        apply_bool = apply
+        if isinstance(apply, dict):
+            apply_bool = apply.get("apply", True)
+
+        result = TwilioClient.sync_twilio_numbers_with_sheet(apply=bool(apply_bool))
         return result
     except Exception as exc:  # pragma: no cover - dépendances externes
         logger.exception("Erreur de synchronisation Twilio/Sheets", exc_info=exc)
