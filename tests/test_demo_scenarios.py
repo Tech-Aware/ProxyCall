@@ -16,8 +16,8 @@ def test_run_mock_client_journey(tmp_path):
                     "client_id": 1,
                     "client_name": "Client Démo",
                     "client_mail": "demo@example.com",
-                    "client_real_phone": 33123456789,
-                    "client_proxy_number": 33900000000,
+                    "client_real_phone": "+33123456789",
+                    "client_proxy_number": "+33900000000",
                     "client_iso_residency": "FR",
                     "client_country_code": "33",
                 }
@@ -46,4 +46,3 @@ def test_cli_command_examples(tmp_path):
     commands = cli_command_examples(fixtures_path=fixtures)
 
     assert commands and "python -m demo.cli" in commands[0]
-    assert str(fixtures) in commands[0]

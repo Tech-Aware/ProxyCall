@@ -59,17 +59,13 @@ python cli.py
 
 Le CLI va :
 
-1. Vous demander le **mode** :
-   - `1` pour la démo **simulée (mock)** — recommandé, aucun prérequis
-   - `2` pour la démo **live** — nécessite Twilio + Google Sheets
+1. Se placer automatiquement en **mode Render** si aucun argument n’est fourni (API hébergée). Utilisez `--live` pour cibler vos comptes Twilio/Google locaux : en l’absence des variables requises, la CLI s’arrête immédiatement avec un message listant les clés manquantes.
 2. Afficher un menu simple `1, 2, 3` pour :
    - `1` Gérer un client : choix entre **créer** (ID auto-incrémenté entier, proxy optionnel), **rechercher/afficher** un client existant (par ID entier ou proxy) ou **attribuer un proxy** ultérieurement à un client déjà créé. Lors de la création, le CLI n’alimente jamais l’ISO ni l’indicatif : le Sheet les calcule, et les numéros (réel/proxy) sont stockés uniquement sous forme d’entiers sans signe « + » **avec validation par indicatif connu** (ex. `33` ou `351` doivent avoir 9 chiffres après l’indicatif).
    - `2` Simuler un appel autorisé (même indicatif pays)
    - `3` Simuler un appel bloqué (indicatif différent)
 
-Les entrées par défaut sont préremplies (ex : `33900000000` pour le proxy mock). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante dans le Sheet) sans saisie obligatoire, même si certaines lignes contiennent des données partielles.
-
-ℹ️ Si vous choisissez le mode **LIVE** sans avoir renseigné les variables d’environnement requises, le CLI vous proposera automatiquement de basculer en mode **MOCK** afin de continuer la démonstration sans erreur.
+Les entrées par défaut sont préremplies (ex : `33900000000` pour le proxy mock utilisé dans les scénarios Python). Lors de la création, l’ID est proposé automatiquement (entier suivant la numérotation existante dans le Sheet) sans saisie obligatoire, même si certaines lignes contiennent des données partielles.
 
 Si vous préférez déclencher ces étapes depuis Python (pour afficher le rendu dans un notebook ou un script interne), utilisez le helper `run_mock_client_journey` de `demo/scenarios.py` :
 

@@ -69,5 +69,14 @@ Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./r
 
 Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render pour l'URL/token uniquement) sont décrits dans `docs/deploiement_render.md`.
 
-Pour consommer le backend depuis n'importe quel poste (ex. Windows), lancez la CLI avec `--render` afin d'envoyer les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN`.
+Par défaut, la CLI bascule désormais en **mode Render** dès lors qu'aucun argument n'est passé :
+
+- préparez un fichier `.env.render` minimal :
+
+  ```env
+  PUBLIC_BASE_URL=https://votre-instance.onrender.com
+  # PROXYCALL_API_TOKEN=xxxx (optionnel si vous protégez l'API)
+  ```
+- lancez vos commandes sans argument (ou avec `--render` si vous préférez l'expliciter) et les requêtes seront déléguées à l'API Render (`create-client`, `pool-list`, etc.).
+- le mode **Live** reste disponible pour les développeurs via `--live` mais exige toutes les variables locales (Twilio + Google Sheets). En cas d'oubli, la CLI s'arrête immédiatement avec un message expliquant les clés manquantes.
 

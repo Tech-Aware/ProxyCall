@@ -1624,7 +1624,10 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
 # CLI wiring
 # =========================
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="proxycall-demo", description="ProxyCall DEMO CLI (mock/live)")
+    p = argparse.ArgumentParser(
+        prog="proxycall-demo",
+        description="ProxyCall DEMO CLI (Render par défaut, Live pour les devs)",
+    )
     p.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="DEBUG, INFO, WARNING, ERROR")
     p.add_argument("--verbose", action="store_true", help="Affiche les stack traces en cas d’erreur.")
     p.add_argument(
@@ -1639,11 +1642,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--mock", action="store_true", help="Mode MOCK (offline).")
     mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
     mode.add_argument("--render", action="store_true", help="Mode RENDER (appels HTTP vers l'API Render).")
 
-    p.epilog = "Astuce : lance simplement `python cli.py` et laisse-toi guider, aucun argument n'est requis."
+    p.epilog = (
+        "Astuce : lance simplement `python cli.py` sans argument pour cibler Render. "
+        "Utilise `--live` uniquement en développement avec toutes les variables requises."
+    )
 
     sp = p.add_subparsers(dest="cmd", required=False)
 
@@ -1712,28 +1717,68 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _resolve_service_account_file(raw_path: str) -> Path:
+    sa_file = Path(raw_path).expanduser()
+
+    if not sa_file.is_absolute():
+        repo_root = Path(__file__).resolve().parent.parent
+        candidate = repo_root / sa_file
+        if candidate.exists():
+            sa_file = candidate
+
+    return sa_file.resolve()
+
+
+def _enforce_live_prerequisites(logger: logging.Logger) -> None:
+    required_vars = [
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "PUBLIC_BASE_URL",
+        "GOOGLE_SHEET_NAME",
+        "GOOGLE_SERVICE_ACCOUNT_FILE",
+    ]
+
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        message = (
+            "Mode LIVE indisponible : variables d'environnement manquantes -> "
+            + ", ".join(missing)
+        )
+        logger.error(message)
+        raise ConfigError(message, details={"missing": missing})
+
+    sa_path = _resolve_service_account_file(os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", ""))
+    if not sa_path.exists():
+        message = (
+            "Mode LIVE indisponible : le fichier de compte de service est introuvable -> "
+            f"{sa_path}"
+        )
+        logger.error(message)
+        raise ConfigError(message, details={"missing_file": str(sa_path)})
+
+    logger.info(
+        "[blue]CLI[/blue] mode LIVE activé (toutes les variables critiques sont présentes)."
+    )
+
+
 def select_mode(args: argparse.Namespace) -> str:
+    logger = logging.getLogger(__name__)
+
     if args.live:
+        _enforce_live_prerequisites(logger)
         return "live"
-    if args.mock:
-        return "mock"
+
     if getattr(args, "render", False):
+        logger.info(
+            "[blue]CLI[/blue] mode Render sélectionné explicitement (API hébergée)."
+        )
         return "render"
 
-    print("Bienvenue ! Choisis le mode de démonstration :")
-    print("  1) Démo simulée (MOCK) — recommandé, aucun prérequis")
-    print("  2) Démo live (LIVE) — Twilio + Google Sheets requis")
-    print("  3) Mode Render distant (appels HTTP vers l'API hébergée)")
-
-    while True:
-        user_choice = input("Sélection (1 par défaut) : ").strip() or "1"
-        if user_choice == "1":
-            return "mock"
-        if user_choice == "2":
-            return "live"
-        if user_choice == "3":
-            return "render"
-        print("Merci de répondre par 1, 2 ou 3.")
+    logger.info(
+        "Aucun mode spécifié : bascule automatique en mode Render (API hébergée). "
+        "Utilise --live pour le mode développeur avec secrets locaux."
+    )
+    return "render"
 
 
 def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> ClientStore:
@@ -1745,15 +1790,7 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
 
     sheet_name = ensure_env("GOOGLE_SHEET_NAME")
     sa_env = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
-    sa_file = Path(sa_env).expanduser()
-
-    if not sa_file.is_absolute():
-        repo_root = Path(__file__).resolve().parent.parent
-        candidate = repo_root / sa_file
-        if candidate.exists():
-            sa_file = candidate
-
-    sa_file = sa_file.resolve()
+    sa_file = _resolve_service_account_file(sa_env)
     worksheet = os.getenv("GOOGLE_CLIENTS_WORKSHEET", "Clients")
 
     return SheetsStore(sheet_name=sheet_name, service_account_file=str(sa_file), worksheet=worksheet, logger=logger)
