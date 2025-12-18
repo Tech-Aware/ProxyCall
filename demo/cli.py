@@ -304,6 +304,9 @@ class RenderAPIClient:
     def create_client(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/clients", json_body=payload)
 
+    def update_client(self, client_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PUT", f"/clients/{client_id}", json_body=payload)
+
     def get_client(self, client_id: str) -> dict[str, Any]:
         return self._request("GET", f"/clients/{client_id}")
 
@@ -862,8 +865,26 @@ class RenderClientStore(ClientStore):
             "client_mail": client.client_mail,
             "client_real_phone": client.client_real_phone,
             "client_iso_residency": client.client_iso_residency,
+            "client_proxy_number": client.client_proxy_number,
+            "client_country_code": client.client_country_code,
         }
-        data = self.api.create_client(payload)
+        cid = str(client.client_id)
+        try:
+            if cid in self._cache:
+                data = self.api.update_client(cid, payload)
+            else:
+                data = self.api.create_client(payload)
+        except ExternalServiceError as exc:
+            status = exc.details.get("status") if isinstance(exc, ExternalServiceError) else None
+            if status == 400:
+                self.logger.info(
+                    "[yellow]RENDER[/yellow] client %s existant, bascule en mise à jour.",
+                    cid,
+                )
+                data = self.api.update_client(cid, payload)
+            else:
+                raise
+
         new_client = self._to_demo_client({**payload, **data})
         self._cache[str(new_client.client_id)] = new_client
 
