@@ -24,8 +24,9 @@ Pour déployer :
    - `PUBLIC_BASE_URL` : URL Render publique (ex. `https://proxycall.onrender.com`).
    - `PROXYCALL_API_TOKEN` : si vous protégez l'API par un header ou une auth personnalisée.
 2. Construisez (si besoin) puis installez le bundle léger :
-   - `python -m pip install build && python -m build` pour générer les artefacts dans `dist/`.
-   - `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
+   - `python scripts/publier_sur_pypi.py --dry-run` pour préparer les artefacts sans upload (nécessite `TWINE_USERNAME/TWINE_PASSWORD`).
+   - `python -m pip install build && python -m build` reste possible pour un build manuel.
+   - Installez ensuite : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
 3. Utilisez la CLI (Render par défaut) : `python -m proxycall create-client ...` ou `proxycall-cli pool-list ...`. Le client HTTP (`httpx`) se base sur l'URL/token `.env.render`.
 4. Activez le mode Dev (Twilio/Google) uniquement si nécessaire avec `proxycall-cli-live ...` (ou `proxycall-cli --live ...`) et fournissez les variables Twilio/Google dans `.env` ou l'environnement.
 5. La CLI charge automatiquement `.env.render` puis `.env`, en partant du répertoire utilisateur courant ou de ses parents (résolution `find_dotenv`), avec redaction des logs (Rich) et messages d'erreur détaillés. Les erreurs réseau/HTTP sont remontées avec le code status et le détail JSON renvoyé par l'API Render.

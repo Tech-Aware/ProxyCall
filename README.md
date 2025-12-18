@@ -72,7 +72,8 @@ Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur 
 Pour consommer le backend depuis n'importe quel poste (ex. Windows), la CLI envoie par défaut les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN` (mode Render par défaut, basé sur `.env.render`).
 
 ### Distribution légère de la CLI
-- Construire le bundle : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
+- Construire le bundle manuellement : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
+- **Publication PyPI en une commande** : `python scripts/publier_sur_pypi.py` (attend `TWINE_USERNAME/TWINE_PASSWORD` avec un token PyPI). Option `--dry-run` pour s'arrêter après le build.
 - Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
 - Utilisation (Render par défaut) : `proxycall-cli ...` ou `python -m proxycall ...` ; aucune option n'est requise pour cibler Render.
 - Mode Dev (Twilio/Google) : utilisez le binaire `proxycall-cli-live` (ou l'option `--live`) et fournissez les variables Twilio/Google via `.env` ou l'environnement.

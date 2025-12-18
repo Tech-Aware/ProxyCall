@@ -18,7 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 twilio = ["twilio>=9"]
 gsheets = ["gspread>=5", "google-auth>=2"]
-dev = ["build>=1.0"]
+dev = ["build>=1.0", "twine>=5.0"]
 
 [project.scripts]
 proxycall-cli = "proxycall.__main__:entrypoint"
