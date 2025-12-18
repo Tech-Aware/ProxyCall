@@ -99,6 +99,26 @@ class ClientsRepository:
             logger.exception("Impossible d'enregistrer le client dans Sheets", exc_info=exc)
 
     @staticmethod
+    def get_max_client_id() -> int:
+        """Retourne le plus grand client_id présent dans la feuille Clients."""
+        try:
+            sheet = SheetsClient.get_clients_sheet()
+            records = sheet.get_all_records()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Impossible de lire la feuille Clients", exc_info=exc)
+            raise
+
+        max_id = 0
+        for rec in records:
+            try:
+                cid = int(str(rec.get("client_id", 0)).strip())
+            except Exception:
+                continue
+            max_id = max(max_id, cid)
+
+        return max_id
+
+    @staticmethod
     def update_last_caller_by_proxy(proxy_number: str, caller_number: str) -> None:
         sheet = SheetsClient.get_clients_sheet()
 

@@ -940,9 +940,85 @@ class TwilioClient:
         apply: bool = True,
         twilio_numbers: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        # ... inchangé chez toi ...
-        # (garde ton implémentation actuelle)
-        return super().sync_twilio_numbers_with_sheet(apply=apply, twilio_numbers=twilio_numbers)  # type: ignore
+        """Synchronise les numéros Twilio existants avec la feuille TwilioPools.
+
+        - Lit tous les numéros Twilio (ou ceux passés en argument)
+        - Normalise les numéros pour comparaison
+        - Identifie ceux absents de la feuille et, si ``apply`` est vrai, les ajoute
+        """
+
+        apply_flag = bool(apply)
+
+        try:
+            existing_records = PoolsRepository.list_all()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("[magenta]POOL[/magenta] sync: lecture TwilioPools impossible", exc_info=exc)
+            existing_records = []
+
+        existing_set = {
+            cls._normalize_phone_number(rec.get("phone_number"))
+            for rec in existing_records
+            if cls._normalize_phone_number(rec.get("phone_number"))
+        }
+
+        # Récupération des numéros Twilio si non fournis
+        try:
+            twilio_list = twilio_numbers or twilio.incoming_phone_numbers.list()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("[magenta]POOL[/magenta] sync: impossible de lister les numéros Twilio", exc_info=exc)
+            twilio_list = []
+
+        missing: list[str] = []
+        added: list[str] = []
+
+        for raw in twilio_list:
+            try:
+                phone = cls._normalize_phone_number(getattr(raw, "phone_number", None))
+                if not phone:
+                    continue
+
+                if phone in existing_set:
+                    continue
+
+                missing.append(phone)
+
+                iso = (getattr(raw, "iso_country", "") or "").strip().upper()
+                friendly = getattr(raw, "friendly_name", "") or ""
+
+                logger.info(
+                    "[magenta]POOL[/magenta] sync: numéro manquant détecté", extra={"phone": mask_phone(phone), "country": iso}
+                )
+
+                if not apply_flag:
+                    continue
+
+                PoolsRepository.save_number(
+                    country_iso=iso,
+                    phone_number=phone,
+                    status="available",
+                    friendly_name=friendly,
+                    number_type="mobile",
+                )
+                added.append(phone)
+            except Exception as exc:  # pragma: no cover - robustesse
+                logger.exception(
+                    "[magenta]POOL[/magenta] sync: échec traitement numéro Twilio", exc_info=exc
+                )
+
+        logger.info(
+            "[magenta]POOL[/magenta] sync done apply=%s missing=%s added=%s",
+            apply_flag,
+            len(missing),
+            len(added),
+        )
+
+        return {
+            "missing_numbers": missing,
+            "added_numbers": added,
+            "total_twilio": len(twilio_list),
+            "total_sheet": len(existing_set),
+            "ts": datetime.utcnow().isoformat(),
+        }
 
     @classmethod
     def assign_number_from_pool(
@@ -952,11 +1028,86 @@ class TwilioClient:
         country: str,
         attribution_to_client_name: str,
         number_type: str = settings.TWILIO_NUMBER_TYPE,
+        friendly_name: str | None = None,
     ) -> str:
-        # ... inchangé chez toi ...
-        return super().assign_number_from_pool(  # type: ignore
-            client_id=client_id,
-            country=country,
-            attribution_to_client_name=attribution_to_client_name,
-            number_type=number_type,
+        country_iso = (country or "").strip().upper()
+        requested_type = (number_type or settings.TWILIO_NUMBER_TYPE).strip().lower()
+        friendly = friendly_name or attribution_to_client_name or f"Client-{client_id}"
+
+        if requested_type == "national":
+            requested_type = "local"
+
+        if requested_type not in {"mobile", "local"}:
+            raise ValueError(f"number_type invalide: {requested_type}")
+
+        if not country_iso:
+            raise ValueError("country_iso obligatoire pour l'attribution depuis le pool")
+
+        logger.info(
+            "[magenta]POOL[/magenta] assign start client_id=%s country=%s type=%s friendly=%s",
+            client_id,
+            country_iso,
+            requested_type,
+            friendly,
         )
+
+        reservation = PoolsRepository.reserve_first_available(
+            country_iso=country_iso,
+            number_type=requested_type,
+            client_id=client_id,
+        )
+
+        if not reservation:
+            raise RuntimeError(f"Aucun numéro disponible pour le pays {country_iso} (type {requested_type})")
+
+        phone = cls._normalize_phone_number(reservation.get("phone_number"))
+        if not phone:
+            raise RuntimeError("Numéro réservé invalide (pool)")
+
+        row_index = int(reservation.get("row_index", 0))
+        reserved_token = str(reservation.get("reserved_token", ""))
+        reserved_at = str(reservation.get("reserved_at", ""))
+
+        try:
+            incoming = twilio.incoming_phone_numbers.list(phone_number=phone, limit=1)
+            if incoming:
+                incoming[0].update(friendly_name=friendly)
+                logger.info(
+                    "[cyan]Twilio[/cyan] friendly_name mis à jour pour %s",
+                    mask_phone(phone),
+                )
+            else:
+                logger.warning(
+                    "[cyan]Twilio[/cyan] numéro %s introuvable pour mise à jour du friendly_name",
+                    mask_phone(phone),
+                )
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.warning(
+                "[cyan]Twilio[/cyan] impossible de mettre à jour le friendly_name %s: %s",
+                mask_phone(phone),
+                exc,
+            )
+
+        finalized = PoolsRepository.finalize_assignment_keep_friendly(
+            row_index=row_index,
+            reserved_token=reserved_token,
+            reserved_at=reserved_at,
+            reserved_by_client_id=client_id,
+            attribution_to_client_name=attribution_to_client_name,
+        )
+
+        if not finalized:
+            raise RuntimeError("Conflit lors de la finalisation de l'attribution (pool)")
+
+        cls.ensure_voice_webhook(phone)
+        cls.ensure_messaging_webhook(phone)
+
+        logger.info(
+            "[magenta]POOL[/magenta] assign success client_id=%s country=%s type=%s phone=%s",
+            client_id,
+            country_iso,
+            requested_type,
+            mask_phone(phone),
+        )
+
+        return phone

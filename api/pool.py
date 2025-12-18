@@ -1,10 +1,17 @@
 import logging
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Body
+from pydantic import BaseModel
 
 from integrations.twilio_client import TwilioClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class SyncPoolPayload(BaseModel):
+    apply: bool = True
 
 
 @router.get("/available")
@@ -54,6 +61,7 @@ def assign(
     country_iso: str = Body(...),
     client_name: str = Body(...),
     number_type: str = Body("mobile"),
+    friendly_name: str | None = Body(None),
 ):
     try:
         proxy = TwilioClient.assign_number_from_pool(
@@ -61,20 +69,44 @@ def assign(
             country=country_iso,
             attribution_to_client_name=client_name,
             number_type=number_type,
+            friendly_name=friendly_name,
         )
         return {"client_id": client_id, "proxy": proxy}
+    except (ValueError, RuntimeError) as exc:
+        logger.error(
+            "Attribution du pool refusée (%s)",
+            exc,
+            extra={
+                "client_id": client_id,
+                "country_iso": country_iso,
+                "number_type": number_type,
+            },
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - dépendances externes
         logger.exception("Erreur lors de l'attribution d'un numéro", exc_info=exc)
         raise HTTPException(status_code=500, detail="Erreur attribution pool") from exc
 
 
 @router.post("/sync")
-def sync_pool(apply: bool = Body(True)):
+def sync_pool(payload: SyncPoolPayload | bool | dict[str, Any] = Body(True)):
+    apply_bool = True
+
     try:
-        result = TwilioClient.sync_twilio_numbers_with_sheet(apply=apply)
+        if isinstance(payload, SyncPoolPayload):
+            apply_bool = bool(payload.apply)
+        elif isinstance(payload, dict):
+            apply_bool = bool(payload.get("apply", True))
+        else:
+            apply_bool = bool(payload)
+
+        logger.info("Synchronisation du pool Twilio (apply=%s)", apply_bool)
+        result = TwilioClient.sync_twilio_numbers_with_sheet(apply=apply_bool)
         return result
     except Exception as exc:  # pragma: no cover - dépendances externes
-        logger.exception("Erreur de synchronisation Twilio/Sheets", exc_info=exc)
+        logger.exception(
+            "Erreur de synchronisation Twilio/Sheets (apply=%s)", apply_bool, exc_info=exc
+        )
         raise HTTPException(status_code=500, detail="Erreur sync pool") from exc
 
 
