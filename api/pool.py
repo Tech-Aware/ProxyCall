@@ -61,6 +61,7 @@ def assign(
     country_iso: str = Body(...),
     client_name: str = Body(...),
     number_type: str = Body("mobile"),
+    friendly_name: str | None = Body(None),
 ):
     try:
         proxy = TwilioClient.assign_number_from_pool(
@@ -68,6 +69,7 @@ def assign(
             country=country_iso,
             attribution_to_client_name=client_name,
             number_type=number_type,
+            friendly_name=friendly_name,
         )
         return {"client_id": client_id, "proxy": proxy}
     except (ValueError, RuntimeError) as exc:
@@ -87,14 +89,14 @@ def assign(
 
 
 @router.post("/sync")
-def sync_pool(payload: Any = Body(True)):
+def sync_pool(payload: SyncPoolPayload | bool | dict[str, Any] = Body(True)):
     apply_bool = True
 
     try:
         if isinstance(payload, SyncPoolPayload):
             apply_bool = bool(payload.apply)
-        elif isinstance(payload, dict) and "apply" in payload:
-            apply_bool = bool(payload.get("apply"))
+        elif isinstance(payload, dict):
+            apply_bool = bool(payload.get("apply", True))
         else:
             apply_bool = bool(payload)
 
