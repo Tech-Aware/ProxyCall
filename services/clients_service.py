@@ -200,3 +200,46 @@ class ClientsService:
             client_real_phone=client_real_phone,
             client_iso_residency=client_iso_residency,
         )
+
+    @staticmethod
+    def update_client(
+        client_id: str,
+        *,
+        client_name: str | None = None,
+        client_mail: str | None = None,
+        client_real_phone: str | None = None,
+        client_proxy_number: str | None = None,
+        client_iso_residency: str | None = None,
+        client_country_code: str | None = None,
+    ) -> Client:
+        """
+        Met à jour un client existant dans Sheets.
+
+        - Lève ValueError si le client n'existe pas.
+        - Préserve les champs non renseignés et la colonne client_last_caller.
+        """
+
+        existing = ClientsRepository.get_by_id(client_id)
+        if not existing:
+            raise ValueError(f"Client {client_id} introuvable.")
+
+        updated_phone = client_real_phone or existing.client_real_phone
+        resolved_country = (
+            client_country_code
+            or existing.client_country_code
+            or extract_country_code(updated_phone)
+        )
+
+        updated = Client(
+            client_id=client_id,
+            client_name=client_name or existing.client_name,
+            client_mail=client_mail or existing.client_mail,
+            client_real_phone=updated_phone,
+            client_proxy_number=client_proxy_number or existing.client_proxy_number,
+            client_iso_residency=client_iso_residency or existing.client_iso_residency,
+            client_country_code=resolved_country,
+            client_last_caller=existing.client_last_caller,
+        )
+
+        ClientsRepository.update(updated)
+        return updated

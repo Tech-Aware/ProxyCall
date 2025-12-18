@@ -99,6 +99,63 @@ class ClientsRepository:
             logger.exception("Impossible d'enregistrer le client dans Sheets", exc_info=exc)
 
     @staticmethod
+    def update(client: Client) -> None:
+        """Met à jour un client existant ou l'ajoute s'il est absent."""
+        try:
+            sheet = SheetsClient.get_clients_sheet()
+            headers = sheet.row_values(1)
+            records = sheet.get_all_records()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception(
+                "Impossible de lire la feuille Clients pour mise à jour", exc_info=exc
+            )
+            return
+
+        target_row = None
+        for row_idx, rec in enumerate(records, start=2):
+            if str(rec.get("client_id")) == str(client.client_id):
+                target_row = row_idx
+                break
+
+        if target_row is None:
+            logger.warning(
+                "Client introuvable pour mise à jour, ajout en fin de feuille.",
+                extra={"client_id": client.client_id},
+            )
+            ClientsRepository.save(client)
+            return
+
+        existing_row = sheet.row_values(target_row)
+        existing_map = {
+            headers[i]: existing_row[i] if i < len(existing_row) else ""
+            for i in range(len(headers))
+        }
+
+        updated_map = existing_map | {
+            "client_id": client.client_id,
+            "client_name": client.client_name,
+            "client_mail": client.client_mail,
+            "client_real_phone": client.client_real_phone,
+            "client_proxy_number": client.client_proxy_number,
+            "client_iso_residency": client.client_iso_residency,
+            "client_country_code": client.client_country_code,
+            "client_last_caller": existing_map.get("client_last_caller", ""),
+        }
+
+        row_values = [updated_map.get(header, "") for header in headers]
+
+        try:
+            sheet.update(f"A{target_row}", [row_values])
+            logger.info(
+                "Client mis à jour dans Sheets",
+                extra={"client_id": client.client_id, "row": target_row},
+            )
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception(
+                "Impossible de mettre à jour le client dans Sheets", exc_info=exc
+            )
+
+    @staticmethod
     def get_max_client_id() -> int:
         """Retourne le plus grand client_id présent dans la feuille Clients."""
         try:
