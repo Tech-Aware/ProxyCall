@@ -329,7 +329,9 @@ class RenderAPIClient:
             json_body={"country_iso": country_iso, "batch_size": batch_size, "number_type": number_type},
         )
 
-    def pool_assign(self, client_id: int, country_iso: str, client_name: str, number_type: str) -> dict[str, Any]:
+    def pool_assign(
+        self, client_id: int, country_iso: str, client_name: str, number_type: str, friendly_name: str | None
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             "/pool/assign",
@@ -338,6 +340,7 @@ class RenderAPIClient:
                 "country_iso": country_iso,
                 "client_name": client_name,
                 "number_type": number_type,
+                "friendly_name": friendly_name,
             },
         )
 
@@ -451,18 +454,35 @@ class MockJsonStore(ClientStore):
                 continue
             filtered.append(r)
 
+        try:
+            real_phone = normalize_phone_digits(client.client_real_phone, label="client_real_phone")
+        except ValidationError:
+            raw_real = str(client.client_real_phone).lstrip("+")
+            real_phone = normalize_phone_digits(f"+{raw_real}", label="client_real_phone")
+            self.logger.warning(
+                "[cyan]MOCK[/cyan] client_real_phone sans préfixe '+', normalisé en %s", real_phone
+            )
+
+        proxy_phone = ""
+        if client.client_proxy_number is not None and str(client.client_proxy_number).strip():
+            try:
+                proxy_phone = normalize_phone_digits(client.client_proxy_number, label="client_proxy_number")
+            except ValidationError:
+                raw_proxy = str(client.client_proxy_number).lstrip("+")
+                proxy_phone = normalize_phone_digits(f"+{raw_proxy}", label="client_proxy_number")
+                self.logger.warning(
+                    "[cyan]MOCK[/cyan] client_proxy_number sans préfixe '+', normalisé en %s", proxy_phone
+                )
+
         new_row: dict[str, Any] = {
             "client_id": client.client_id,
             "client_name": client.client_name,
             "client_mail": client.client_mail,
-            "client_real_phone": client.client_real_phone,
-            "client_proxy_number": client.client_proxy_number if client.client_proxy_number is not None else "",
+            "client_real_phone": real_phone,
+            "client_proxy_number": proxy_phone,
+            "client_iso_residency": client.client_iso_residency or preserved_iso or "",
+            "client_country_code": client.client_country_code or preserved_cc or "",
         }
-
-        if preserved_iso is not None:
-            new_row["client_iso_residency"] = preserved_iso
-        if preserved_cc is not None:
-            new_row["client_country_code"] = preserved_cc
 
         filtered.append(new_row)
         self._dump(filtered)
@@ -879,7 +899,7 @@ class RenderPoolStore(PoolStore):
         return [str(p) for p in purchased]
 
     def assign_number(self, country_iso: str, friendly_name: str, client_name: str, client_id: int, *, number_type: str = "mobile") -> str:
-        data = self.api.pool_assign(client_id, country_iso, client_name, number_type)
+        data = self.api.pool_assign(client_id, country_iso, client_name, number_type, friendly_name)
         proxy = data.get("proxy") if isinstance(data, dict) else None
         if not proxy:
             raise ExternalServiceError("Réponse Render invalide: proxy manquant")
