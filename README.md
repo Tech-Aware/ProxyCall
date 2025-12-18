@@ -82,6 +82,7 @@ Pour consommer le backend depuis n'importe quel poste (ex. Windows), la CLI envo
     python scripts/publier_sur_pypi.py
     ```
   - Option `--dry-run` pour s'arrêter après le build.
+  - Si PyPI renvoie `File already exists`, incrémentez la version dans `pyproject.toml` (section `[project]`) avant de relancer pour publier une nouvelle archive.
 - Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
 - Utilisation (Render par défaut) : `proxycall-cli ...` ou `python -m proxycall ...` ; aucune option n'est requise pour cibler Render.
 - Mode Dev (Twilio/Google) : utilisez le binaire `proxycall-cli-live` (ou l'option `--live`) et fournissez les variables Twilio/Google via `.env` ou l'environnement.

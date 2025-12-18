@@ -30,10 +30,37 @@ def _run_command(description: str, command: Iterable[str]) -> None:
     """
     LOGGER.info("%s", description)
     try:
-        subprocess.run(command, check=True)
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     except subprocess.CalledProcessError as exc:  # pragma: no cover - protection runtime
-        LOGGER.error("Échec de la commande (%s): code=%s", " ".join(command), exc.returncode)
-        raise RuntimeError(f"La commande '{' '.join(command)}' a échoué") from exc
+        stdout = (exc.stdout or "").strip()
+        stderr = (exc.stderr or "").strip()
+        if stdout:
+            LOGGER.error("Sortie standard:\n%s", stdout)
+        if stderr:
+            LOGGER.error("Sortie d'erreur:\n%s", stderr)
+
+        erreur_detaillee = "La commande '{cmd}' a échoué avec le code {code}.".format(
+            cmd=" ".join(command), code=exc.returncode
+        )
+        retour_contenu = f" {stdout} {stderr}".lower()
+        if "file already exists" in retour_contenu:
+            erreur_detaillee = (
+                f"{erreur_detaillee} Une archive avec cette version est déjà publiée sur l'index"
+                " cible. Incrémentez la version dans pyproject.toml puis relancez la publication"
+                " pour éviter le conflit."
+            )
+
+        raise RuntimeError(erreur_detaillee) from exc
+    else:
+        if completed.stdout:
+            LOGGER.info("Sortie standard:\n%s", completed.stdout.strip())
+        if completed.stderr:
+            LOGGER.info("Sortie d'erreur:\n%s", completed.stderr.strip())
 
 
 def _verifier_identifiants() -> None:
