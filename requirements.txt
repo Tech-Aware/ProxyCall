@@ -7,3 +7,4 @@ python-dotenv
 pytest
 rich
 httpx
+python-multipart
