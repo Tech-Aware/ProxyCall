@@ -224,11 +224,16 @@ class ClientsService:
             raise ValueError(f"Client {client_id} introuvable.")
 
         updated_phone = client_real_phone or existing.client_real_phone
-        resolved_country = (
-            client_country_code
-            or existing.client_country_code
-            or extract_country_code(updated_phone)
-        )
+        if client_iso_residency:
+            logger.info(
+                "Champ client_iso_residency ignoré lors de la mise à jour (protégé)",
+                extra={"client_id": client_id},
+            )
+        if client_country_code:
+            logger.info(
+                "Champ client_country_code ignoré lors de la mise à jour (protégé)",
+                extra={"client_id": client_id},
+            )
 
         updated = Client(
             client_id=client_id,
@@ -236,8 +241,8 @@ class ClientsService:
             client_mail=client_mail or existing.client_mail,
             client_real_phone=updated_phone,
             client_proxy_number=client_proxy_number or existing.client_proxy_number,
-            client_iso_residency=client_iso_residency or existing.client_iso_residency,
-            client_country_code=resolved_country,
+            client_iso_residency=existing.client_iso_residency,
+            client_country_code=existing.client_country_code,
             client_last_caller=existing.client_last_caller,
         )
 

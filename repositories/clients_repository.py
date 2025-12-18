@@ -7,6 +7,18 @@ from integrations.sheets_client import SheetsClient
 logger = logging.getLogger(__name__)
 
 
+def _column_letter(index: int) -> str:
+    """Convertit un index de colonne (1-indexé) en lettre Excel (A, B, ...)."""
+    if index < 1:
+        raise ValueError("L'index de colonne doit être supérieur ou égal à 1")
+
+    letters = []
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters.append(chr(65 + remainder))
+    return "".join(reversed(letters))
+
+
 class ClientsRepository:
     """
     Implémentation Google Sheets.
@@ -87,8 +99,6 @@ class ClientsRepository:
                 client.client_mail,
                 client.client_real_phone,
                 client.client_proxy_number,
-                client.client_iso_residency,
-                client.client_country_code,
             ]
             sheet.append_row(row)
             logger.info(
@@ -131,23 +141,48 @@ class ClientsRepository:
             for i in range(len(headers))
         }
 
-        updated_map = existing_map | {
+        updated_map = {
             "client_id": client.client_id,
             "client_name": client.client_name,
             "client_mail": client.client_mail,
             "client_real_phone": client.client_real_phone,
             "client_proxy_number": client.client_proxy_number,
-            "client_iso_residency": client.client_iso_residency,
-            "client_country_code": client.client_country_code,
             "client_last_caller": existing_map.get("client_last_caller", ""),
         }
 
-        row_values = [updated_map.get(header, "") for header in headers]
+        updates = []
+        for header, value in updated_map.items():
+            if header in {"client_iso_residency", "client_country_code"}:
+                logger.info(
+                    "Colonne protégée ignorée lors de la mise à jour", extra={"colonne": header}
+                )
+                continue
+            try:
+                col_idx = headers.index(header) + 1
+            except ValueError:
+                logger.warning(
+                    "Colonne absente dans la feuille, mise à jour ignorée",
+                    extra={"colonne": header, "client_id": client.client_id},
+                )
+                continue
+
+            current_val = existing_map.get(header, "")
+            if str(current_val) == str(value):
+                continue
+
+            updates.append({"range": f"{_column_letter(col_idx)}{target_row}", "values": [[value]]})
+
+        if not updates:
+            logger.info(
+                "Aucune mise à jour nécessaire pour le client (colonnes protégées conservées)",
+                extra={"client_id": client.client_id},
+            )
+            return
 
         try:
-            sheet.update(f"A{target_row}", [row_values])
+            sheet.batch_update(updates)
             logger.info(
-                "Client mis à jour dans Sheets",
+                "Client mis à jour dans Sheets (colonnes F et G préservées)",
                 extra={"client_id": client.client_id, "row": target_row},
             )
         except Exception as exc:  # pragma: no cover - dépendances externes
