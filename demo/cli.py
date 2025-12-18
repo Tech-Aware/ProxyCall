@@ -1174,10 +1174,16 @@ def ensure_env(var: str) -> str:
 
 
 def load_env_files() -> list[Path]:
-    """Charge .env puis .env.render afin de préparer la CLI pour Render."""
+    """Charge .env puis .env.render en partant du répertoire courant."""
 
     loaded: list[Path] = []
-    repo_root = Path(__file__).resolve().parent.parent
+    seen: set[Path] = set()
+
+    def _load_candidate(path: Path) -> None:
+        if path.exists() and path not in seen:
+            load_dotenv(path, override=True)
+            loaded.append(path)
+            seen.add(path)
 
     # 📌 Ordre d'écrasement :
     #  - on charge d'abord .env (dev local)
@@ -1185,15 +1191,11 @@ def load_env_files() -> list[Path]:
     # Cet ordre évite qu'une ancienne config locale (ex: URL ngrok) n'écrase
     # l'URL publique renseignée dans .env.render.
     for filename in (".env", ".env.render"):
-        repo_env = repo_root / filename
-        if repo_env.exists():
-            load_dotenv(repo_env, override=True)
-            loaded.append(repo_env)
+        _load_candidate(Path.cwd() / filename)
 
-        discovered = Path(find_dotenv(filename=filename, usecwd=True))
-        if discovered and discovered.exists() and discovered not in loaded:
-            load_dotenv(discovered, override=True)
-            loaded.append(discovered)
+        discovered = find_dotenv(filename=filename, usecwd=True)
+        if discovered:
+            _load_candidate(Path(discovered))
 
     return loaded
 
@@ -1625,29 +1627,18 @@ def do_pool_fix_webhooks(args: argparse.Namespace, pool_store: PoolStore, logger
 # =========================
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="proxycall-demo",
-        description="ProxyCall DEMO CLI (Render par défaut, Live pour les devs)",
+        prog="proxycall-cli",
+        description="ProxyCall CLI (Render par défaut, mode Dev via binaire dédié)",
     )
     p.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="DEBUG, INFO, WARNING, ERROR")
     p.add_argument("--verbose", action="store_true", help="Affiche les stack traces en cas d’erreur.")
-    p.add_argument(
-        "--fixtures",
-        default=str((Path(__file__).parent / "fixtures" / "clients.json").resolve()),
-        help="Chemin fixtures JSON (mode mock).",
-    )
-    p.add_argument(
-        "--pools-fixtures",
-        default=str(POOL_FIXTURES_DEFAULT.resolve()),
-        help="Chemin fixtures pool (mode mock).",
-    )
 
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--live", action="store_true", help="Mode LIVE (Twilio + Sheets).")
-    mode.add_argument("--render", action="store_true", help="Mode RENDER (appels HTTP vers l'API Render).")
+    # Mode Dev (ex-live) accessible via le binaire `proxycall-cli-live` ou l’option --live
+    p.add_argument("--live", action="store_true", help="Mode Dev (Twilio + Google Sheets).")
 
     p.epilog = (
-        "Astuce : lance simplement `python cli.py` sans argument pour cibler Render. "
-        "Utilise `--live` uniquement en développement avec toutes les variables requises."
+        "Astuce : `proxycall-cli` utilise Render par défaut. "
+        "Utilisez `proxycall-cli-live` ou `--live` pour le mode Dev (Twilio/Google)."
     )
 
     sp = p.add_subparsers(dest="cmd", required=False)
@@ -1717,66 +1708,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _resolve_service_account_file(raw_path: str) -> Path:
-    sa_file = Path(raw_path).expanduser()
-
-    if not sa_file.is_absolute():
-        repo_root = Path(__file__).resolve().parent.parent
-        candidate = repo_root / sa_file
-        if candidate.exists():
-            sa_file = candidate
-
-    return sa_file.resolve()
-
-
-def _enforce_live_prerequisites(logger: logging.Logger) -> None:
-    required_vars = [
-        "TWILIO_ACCOUNT_SID",
-        "TWILIO_AUTH_TOKEN",
-        "PUBLIC_BASE_URL",
-        "GOOGLE_SHEET_NAME",
-        "GOOGLE_SERVICE_ACCOUNT_FILE",
-    ]
-
-    missing = [var for var in required_vars if not os.getenv(var)]
-    if missing:
-        message = (
-            "Mode LIVE indisponible : variables d'environnement manquantes -> "
-            + ", ".join(missing)
-        )
-        logger.error(message)
-        raise ConfigError(message, details={"missing": missing})
-
-    sa_path = _resolve_service_account_file(os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", ""))
-    if not sa_path.exists():
-        message = (
-            "Mode LIVE indisponible : le fichier de compte de service est introuvable -> "
-            f"{sa_path}"
-        )
-        logger.error(message)
-        raise ConfigError(message, details={"missing_file": str(sa_path)})
-
-    logger.info(
-        "[blue]CLI[/blue] mode LIVE activé (toutes les variables critiques sont présentes)."
-    )
-
-
 def select_mode(args: argparse.Namespace) -> str:
-    logger = logging.getLogger(__name__)
-
-    if args.live:
-        _enforce_live_prerequisites(logger)
+    if getattr(args, "live", False):
+        logging.getLogger(__name__).info(
+            "Mode Dev sélectionné (Twilio/Google requis, variables .env nécessaires)."
+        )
         return "live"
 
-    if getattr(args, "render", False):
-        logger.info(
-            "[blue]CLI[/blue] mode Render sélectionné explicitement (API hébergée)."
-        )
-        return "render"
-
-    logger.info(
-        "Aucun mode spécifié : bascule automatique en mode Render (API hébergée). "
-        "Utilise --live pour le mode développeur avec secrets locaux."
+    logging.getLogger(__name__).info(
+        "Mode Render sélectionné par défaut (appel HTTP distant, .env.render attendu)."
     )
     return "render"
 
@@ -1790,7 +1730,15 @@ def make_store(mode: str, args: argparse.Namespace, logger: logging.Logger) -> C
 
     sheet_name = ensure_env("GOOGLE_SHEET_NAME")
     sa_env = ensure_env("GOOGLE_SERVICE_ACCOUNT_FILE")
-    sa_file = _resolve_service_account_file(sa_env)
+    sa_file = Path(sa_env).expanduser()
+
+    if not sa_file.is_absolute():
+        repo_root = Path(__file__).resolve().parent.parent
+        candidate = repo_root / sa_file
+        if candidate.exists():
+            sa_file = candidate
+
+    sa_file = sa_file.resolve()
     worksheet = os.getenv("GOOGLE_CLIENTS_WORKSHEET", "Clients")
 
     return SheetsStore(sheet_name=sheet_name, service_account_file=str(sa_file), worksheet=worksheet, logger=logger)

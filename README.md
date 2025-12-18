@@ -69,14 +69,21 @@ Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./r
 
 Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render pour l'URL/token uniquement) sont décrits dans `docs/deploiement_render.md`.
 
-Par défaut, la CLI bascule désormais en **mode Render** dès lors qu'aucun argument n'est passé :
+Pour consommer le backend depuis n'importe quel poste (ex. Windows), la CLI envoie par défaut les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN` (mode Render par défaut, basé sur `.env.render`).
 
-- préparez un fichier `.env.render` minimal :
-
-  ```env
-  PUBLIC_BASE_URL=https://votre-instance.onrender.com
-  # PROXYCALL_API_TOKEN=xxxx (optionnel si vous protégez l'API)
-  ```
-- lancez vos commandes sans argument (ou avec `--render` si vous préférez l'expliciter) et les requêtes seront déléguées à l'API Render (`create-client`, `pool-list`, etc.).
-- le mode **Live** reste disponible pour les développeurs via `--live` mais exige toutes les variables locales (Twilio + Google Sheets). En cas d'oubli, la CLI s'arrête immédiatement avec un message expliquant les clés manquantes.
-
+### Distribution légère de la CLI
+- Construire le bundle manuellement : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
+- **Publication PyPI en une commande** : `python scripts/publier_sur_pypi.py`.
+  - Identifiants attendus dans l'environnement : `TWINE_USERNAME=__token__` et `TWINE_PASSWORD=pypi-xxxxxxxx` (ou `testpypi-xxxxxxxx`).
+  - Sous PowerShell (PyCharm ou terminal Windows) :
+    ```powershell
+    $Env:TWINE_USERNAME="__token__"
+    $Env:TWINE_PASSWORD="pypi-xxxxxxxx"
+    python scripts/publier_sur_pypi.py
+    ```
+  - Option `--dry-run` pour s'arrêter après le build.
+  - Le script incrémente automatiquement le patch de version dans `pyproject.toml` à chaque exécution (0.1.0 → 0.1.1 → 0.1.2, etc.) pour éviter les collisions PyPI ; conservez le contrôle manuel en éditant la version avant d'appeler le script si besoin.
+- Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
+- Utilisation (Render par défaut) : `proxycall-cli ...` ou `python -m proxycall ...` ; aucune option n'est requise pour cibler Render.
+- Mode Dev (Twilio/Google) : utilisez le binaire `proxycall-cli-live` (ou l'option `--live`) et fournissez les variables Twilio/Google via `.env` ou l'environnement.
+- La CLI charge automatiquement `.env` puis `.env.render` à partir du répertoire courant ou de ses parents (résolution `find_dotenv`), sans dépendre de la racine du dépôt.
