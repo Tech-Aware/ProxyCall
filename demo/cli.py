@@ -342,7 +342,7 @@ class RenderAPIClient:
         )
 
     def pool_sync(self, apply: bool = True) -> dict[str, Any]:
-        return self._request("POST", "/pool/sync", json_body={"apply": apply})
+        return self._request("POST", "/pool/sync", json_body=bool(apply))
 
     def pool_fix_webhooks(
         self,
@@ -767,14 +767,32 @@ class RenderClientStore(ClientStore):
         self.logger = logger
         self._cache: dict[str, DemoClient] = {}
 
-    @staticmethod
-    def _to_demo_client(payload: dict[str, Any]) -> DemoClient:
+    def _normalize_from_render(self, value: str | int, *, label: str) -> str:
+        try:
+            return normalize_phone_digits(value, label=label)
+        except ValidationError:
+            compact = re.sub(r"[^0-9+]", "", str(value or "").strip())
+            if compact and not compact.startswith("+"):
+                candidate = f"+{compact}"
+                try:
+                    normalized = normalize_phone_digits(candidate, label=label)
+                    self.logger.warning(
+                        "[yellow]RENDER[/yellow] %s sans préfixe '+', normalisé en %s",
+                        label,
+                        normalized,
+                    )
+                    return normalized
+                except ValidationError:
+                    pass
+            raise
+
+    def _to_demo_client(self, payload: dict[str, Any]) -> DemoClient:
         return DemoClient(
             client_id=parse_client_id(payload.get("client_id")),
             client_name=str(payload.get("client_name", "")),
             client_mail=str(payload.get("client_mail", "")),
-            client_real_phone=normalize_phone_digits(payload.get("client_real_phone", ""), label="client_real_phone"),
-            client_proxy_number=normalize_phone_digits(payload.get("client_proxy_number", ""), label="client_proxy_number") if payload.get("client_proxy_number") else None,
+            client_real_phone=self._normalize_from_render(payload.get("client_real_phone", ""), label="client_real_phone"),
+            client_proxy_number=self._normalize_from_render(payload.get("client_proxy_number", ""), label="client_proxy_number") if payload.get("client_proxy_number") else None,
             client_iso_residency=str(payload.get("client_iso_residency", "")),
             client_country_code=str(payload.get("client_country_code", "")),
         )
