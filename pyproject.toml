@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proxycall-cli"
+version = "0.1.0"
+description = "CLI ProxyCall légère pour piloter l'API en local ou sur Render"
+readme = "README.md"
+authors = [{ name = "Équipe ProxyCall" }]
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.25",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+twilio = ["twilio>=9"]
+gsheets = ["gspread>=5", "google-auth>=2"]
+dev = ["build>=1.0"]
+
+[project.scripts]
+proxycall-cli = "proxycall.__main__:entrypoint"
+
+[project.urls]
+Homepage = "https://github.com/user/project"
+
+[tool.setuptools]
+py-modules = ["cli"]
+packages = ["proxycall", "app", "demo"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"demo" = ["fixtures/*.json"]

@@ -71,3 +71,8 @@ Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur 
 
 Pour consommer le backend depuis n'importe quel poste (ex. Windows), lancez la CLI avec `--render` afin d'envoyer les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN`.
 
+### Distribution légère de la CLI
+- Construire le bundle : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
+- Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
+- Utilisation : `python -m proxycall --render ...` ou via le binaire installé `proxycall-cli --render ...`.
+- La CLI charge automatiquement `.env` puis `.env.render` à partir du répertoire courant ou de ses parents (résolution `find_dotenv`), sans dépendre de la racine du dépôt.

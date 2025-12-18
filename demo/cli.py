@@ -1174,10 +1174,16 @@ def ensure_env(var: str) -> str:
 
 
 def load_env_files() -> list[Path]:
-    """Charge .env puis .env.render afin de préparer la CLI pour Render."""
+    """Charge .env puis .env.render en partant du répertoire courant."""
 
     loaded: list[Path] = []
-    repo_root = Path(__file__).resolve().parent.parent
+    seen: set[Path] = set()
+
+    def _load_candidate(path: Path) -> None:
+        if path.exists() and path not in seen:
+            load_dotenv(path, override=True)
+            loaded.append(path)
+            seen.add(path)
 
     # 📌 Ordre d'écrasement :
     #  - on charge d'abord .env (dev local)
@@ -1185,15 +1191,11 @@ def load_env_files() -> list[Path]:
     # Cet ordre évite qu'une ancienne config locale (ex: URL ngrok) n'écrase
     # l'URL publique renseignée dans .env.render.
     for filename in (".env", ".env.render"):
-        repo_env = repo_root / filename
-        if repo_env.exists():
-            load_dotenv(repo_env, override=True)
-            loaded.append(repo_env)
+        _load_candidate(Path.cwd() / filename)
 
-        discovered = Path(find_dotenv(filename=filename, usecwd=True))
-        if discovered and discovered.exists() and discovered not in loaded:
-            load_dotenv(discovered, override=True)
-            loaded.append(discovered)
+        discovered = find_dotenv(filename=filename, usecwd=True)
+        if discovered:
+            _load_candidate(Path(discovered))
 
     return loaded
 
