@@ -1,4 +1,6 @@
 import logging
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 
@@ -68,15 +70,35 @@ def assign(
             number_type=number_type,
         )
         return {"client_id": client_id, "proxy": proxy}
+    except (ValueError, RuntimeError) as exc:
+        logger.error(
+            "Attribution du pool refusée (%s)",
+            exc,
+            extra={
+                "client_id": client_id,
+                "country_iso": country_iso,
+                "number_type": number_type,
+            },
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - dépendances externes
         logger.exception("Erreur lors de l'attribution d'un numéro", exc_info=exc)
         raise HTTPException(status_code=500, detail="Erreur attribution pool") from exc
 
 
 @router.post("/sync")
-def sync_pool(payload: bool | SyncPoolPayload = Body(True)):
+def sync_pool(payload: Any = Body(True)):
+    apply_bool = True
+
     try:
-        apply_bool = payload.apply if isinstance(payload, SyncPoolPayload) else bool(payload)
+        if isinstance(payload, SyncPoolPayload):
+            apply_bool = bool(payload.apply)
+        elif isinstance(payload, dict) and "apply" in payload:
+            apply_bool = bool(payload.get("apply"))
+        else:
+            apply_bool = bool(payload)
+
+        logger.info("Synchronisation du pool Twilio (apply=%s)", apply_bool)
         result = TwilioClient.sync_twilio_numbers_with_sheet(apply=apply_bool)
         return result
     except Exception as exc:  # pragma: no cover - dépendances externes

@@ -19,8 +19,8 @@ def get_next_client_id():
     return {"next_client_id": next_id}
 
 @router.get("/{client_id}")
-def get_client(client_id: str):
-    client = ClientsService.get_client(client_id)
+def get_client(client_id: int):
+    client = ClientsService.get_client(str(client_id))
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
