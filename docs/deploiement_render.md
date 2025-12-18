@@ -32,7 +32,7 @@ Pour déployer :
        $Env:TWINE_PASSWORD="pypi-xxxxxxxx"
        python scripts/publier_sur_pypi.py --dry-run
        ```
-      - Si l'upload réel renvoie `File already exists`, incrémentez la version dans `pyproject.toml` avant de republier.
+     - Le script incrémente automatiquement la version patch dans `pyproject.toml` à chaque exécution pour éviter un rejet `File already exists`; ajustez manuellement la version si vous souhaitez un saut majeur/mineur.
    - `python -m pip install build && python -m build` reste possible pour un build manuel.
    - Installez ensuite : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
 3. Utilisez la CLI (Render par défaut) : `python -m proxycall create-client ...` ou `proxycall-cli pool-list ...`. Le client HTTP (`httpx`) se base sur l'URL/token `.env.render`.

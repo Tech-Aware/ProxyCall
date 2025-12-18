@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Iterable
 
@@ -61,6 +62,53 @@ def _run_command(description: str, command: Iterable[str]) -> None:
             LOGGER.info("Sortie standard:\n%s", completed.stdout.strip())
         if completed.stderr:
             LOGGER.info("Sortie d'erreur:\n%s", completed.stderr.strip())
+
+
+def _lire_version(pyproject_path: Path) -> str:
+    """Lit la version courante dans pyproject.toml avec contrôle strict.
+
+    :param pyproject_path: Chemin du fichier pyproject.toml.
+    :raises RuntimeError: si la clé de version est absente.
+    """
+
+    with pyproject_path.open("rb") as fichier:
+        contenu = tomllib.load(fichier)
+
+    try:
+        return str(contenu["project"]["version"])
+    except KeyError as exc:  # pragma: no cover - protection runtime
+        raise RuntimeError("Impossible de lire la clé [project.version] dans pyproject.toml") from exc
+
+
+def _incrementer_version(pyproject_path: Path) -> str:
+    """Incrémente le composant correctif (patch) de la version et met à jour pyproject.toml.
+
+    :param pyproject_path: Chemin du fichier pyproject.toml.
+    :return: Nouvelle version appliquée.
+    :raises RuntimeError: si le format de version est invalide ou en cas d'échec d'écriture.
+    """
+
+    version_actuelle = _lire_version(pyproject_path)
+    segments = version_actuelle.split(".")
+    if len(segments) != 3 or not all(part.isdigit() for part in segments):
+        raise RuntimeError(
+            "Le format de version doit être semver simplifié 'X.Y.Z' (ex: 0.1.0)."
+        )
+
+    segments[-1] = str(int(segments[-1]) + 1)
+    nouvelle_version = ".".join(segments)
+
+    contenu = pyproject_path.read_text(encoding="utf-8")
+    ancien_fragment = f'version = "{version_actuelle}"'
+    nouveau_fragment = f'version = "{nouvelle_version}"'
+    if ancien_fragment not in contenu:
+        raise RuntimeError(
+            "Impossible de mettre à jour pyproject.toml : motif de version introuvable."
+        )
+
+    pyproject_path.write_text(contenu.replace(ancien_fragment, nouveau_fragment, 1), encoding="utf-8")
+    LOGGER.info("Version incrémentée automatiquement: %s -> %s", version_actuelle, nouvelle_version)
+    return nouvelle_version
 
 
 def _verifier_identifiants() -> None:
@@ -153,10 +201,12 @@ def main() -> int:
     args = parser.parse_args()
 
     racine = Path(__file__).resolve().parent.parent
+    pyproject_path = racine / "pyproject.toml"
     dist_dir = racine / "dist"
 
     try:
         _verifier_identifiants()
+        _incrementer_version(pyproject_path)
         _installer_outils_build()
         _nettoyer_dist(dist_dir)
         _build_distribution(racine)
