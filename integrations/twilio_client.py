@@ -940,9 +940,85 @@ class TwilioClient:
         apply: bool = True,
         twilio_numbers: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        # ... inchangé chez toi ...
-        # (garde ton implémentation actuelle)
-        return super().sync_twilio_numbers_with_sheet(apply=apply, twilio_numbers=twilio_numbers)  # type: ignore
+        """Synchronise les numéros Twilio existants avec la feuille TwilioPools.
+
+        - Lit tous les numéros Twilio (ou ceux passés en argument)
+        - Normalise les numéros pour comparaison
+        - Identifie ceux absents de la feuille et, si ``apply`` est vrai, les ajoute
+        """
+
+        apply_flag = bool(apply)
+
+        try:
+            existing_records = PoolsRepository.list_all()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("[magenta]POOL[/magenta] sync: lecture TwilioPools impossible", exc_info=exc)
+            existing_records = []
+
+        existing_set = {
+            cls._normalize_phone_number(rec.get("phone_number"))
+            for rec in existing_records
+            if cls._normalize_phone_number(rec.get("phone_number"))
+        }
+
+        # Récupération des numéros Twilio si non fournis
+        try:
+            twilio_list = twilio_numbers or twilio.incoming_phone_numbers.list()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("[magenta]POOL[/magenta] sync: impossible de lister les numéros Twilio", exc_info=exc)
+            twilio_list = []
+
+        missing: list[str] = []
+        added: list[str] = []
+
+        for raw in twilio_list:
+            try:
+                phone = cls._normalize_phone_number(getattr(raw, "phone_number", None))
+                if not phone:
+                    continue
+
+                if phone in existing_set:
+                    continue
+
+                missing.append(phone)
+
+                iso = (getattr(raw, "iso_country", "") or "").strip().upper()
+                friendly = getattr(raw, "friendly_name", "") or ""
+
+                logger.info(
+                    "[magenta]POOL[/magenta] sync: numéro manquant détecté", extra={"phone": mask_phone(phone), "country": iso}
+                )
+
+                if not apply_flag:
+                    continue
+
+                PoolsRepository.save_number(
+                    country_iso=iso,
+                    phone_number=phone,
+                    status="available",
+                    friendly_name=friendly,
+                    number_type="mobile",
+                )
+                added.append(phone)
+            except Exception as exc:  # pragma: no cover - robustesse
+                logger.exception(
+                    "[magenta]POOL[/magenta] sync: échec traitement numéro Twilio", exc_info=exc
+                )
+
+        logger.info(
+            "[magenta]POOL[/magenta] sync done apply=%s missing=%s added=%s",
+            apply_flag,
+            len(missing),
+            len(added),
+        )
+
+        return {
+            "missing_numbers": missing,
+            "added_numbers": added,
+            "total_twilio": len(twilio_list),
+            "total_sheet": len(existing_set),
+            "ts": datetime.utcnow().isoformat(),
+        }
 
     @classmethod
     def assign_number_from_pool(
