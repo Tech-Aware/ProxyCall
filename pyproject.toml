@@ -29,7 +29,7 @@ Homepage = "https://github.com/user/project"
 
 [tool.setuptools]
 py-modules = ["cli"]
-packages = ["proxycall", "app", "demo"]
+packages = ["proxycall", "app", "demo", "demo.fixtures"]
 include-package-data = true
 
 [tool.setuptools.package-data]

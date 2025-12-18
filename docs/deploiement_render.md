@@ -24,7 +24,14 @@ Pour déployer :
    - `PUBLIC_BASE_URL` : URL Render publique (ex. `https://proxycall.onrender.com`).
    - `PROXYCALL_API_TOKEN` : si vous protégez l'API par un header ou une auth personnalisée.
 2. Construisez (si besoin) puis installez le bundle léger :
-   - `python scripts/publier_sur_pypi.py --dry-run` pour préparer les artefacts sans upload (nécessite `TWINE_USERNAME/TWINE_PASSWORD`).
+   - `python scripts/publier_sur_pypi.py --dry-run` pour préparer les artefacts sans upload.
+     - Variables nécessaires : `TWINE_USERNAME=__token__` et `TWINE_PASSWORD=pypi-xxxxxxxx` (ou `testpypi-xxxxxxxx`).
+     - Sous PowerShell :
+       ```powershell
+       $Env:TWINE_USERNAME="__token__"
+       $Env:TWINE_PASSWORD="pypi-xxxxxxxx"
+       python scripts/publier_sur_pypi.py --dry-run
+       ```
    - `python -m pip install build && python -m build` reste possible pour un build manuel.
    - Installez ensuite : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
 3. Utilisez la CLI (Render par défaut) : `python -m proxycall create-client ...` ou `proxycall-cli pool-list ...`. Le client HTTP (`httpx`) se base sur l'URL/token `.env.render`.

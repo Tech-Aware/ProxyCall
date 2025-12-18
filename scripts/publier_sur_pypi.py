@@ -44,7 +44,18 @@ def _verifier_identifiants() -> None:
         raise RuntimeError(
             "TWINE_USERNAME et TWINE_PASSWORD doivent être définis (token API PyPI/TestPyPI)."
         )
-    LOGGER.info("Identifiants Twine détectés (utilisateur=%s).", username)
+
+    if username != "__token__":
+        raise RuntimeError(
+            "TWINE_USERNAME doit être '__token__' pour utiliser un jeton API PyPI/TestPyPI."
+        )
+
+    if not password.startswith(("pypi-", "testpypi-")):
+        raise RuntimeError(
+            "TWINE_PASSWORD doit être un jeton API valide (préfixe pypi-/testpypi-)."
+        )
+
+    LOGGER.info("Identifiants Twine détectés (utilisateur=%s, jeton détecté).", username)
 
 
 def _nettoyer_dist(dist_dir: Path) -> None:

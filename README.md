@@ -73,7 +73,15 @@ Pour consommer le backend depuis n'importe quel poste (ex. Windows), la CLI envo
 
 ### Distribution légère de la CLI
 - Construire le bundle manuellement : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
-- **Publication PyPI en une commande** : `python scripts/publier_sur_pypi.py` (attend `TWINE_USERNAME/TWINE_PASSWORD` avec un token PyPI). Option `--dry-run` pour s'arrêter après le build.
+- **Publication PyPI en une commande** : `python scripts/publier_sur_pypi.py`.
+  - Identifiants attendus dans l'environnement : `TWINE_USERNAME=__token__` et `TWINE_PASSWORD=pypi-xxxxxxxx` (ou `testpypi-xxxxxxxx`).
+  - Sous PowerShell (PyCharm ou terminal Windows) :
+    ```powershell
+    $Env:TWINE_USERNAME="__token__"
+    $Env:TWINE_PASSWORD="pypi-xxxxxxxx"
+    python scripts/publier_sur_pypi.py
+    ```
+  - Option `--dry-run` pour s'arrêter après le build.
 - Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
 - Utilisation (Render par défaut) : `proxycall-cli ...` ou `python -m proxycall ...` ; aucune option n'est requise pour cibler Render.
 - Mode Dev (Twilio/Google) : utilisez le binaire `proxycall-cli-live` (ou l'option `--live`) et fournissez les variables Twilio/Google via `.env` ou l'environnement.
