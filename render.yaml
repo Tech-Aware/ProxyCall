@@ -10,6 +10,8 @@ services:
     envVars:
       - key: PUBLIC_BASE_URL
         sync: false  # à renseigner dans le dashboard (Render fournit RENDER_EXTERNAL_URL)
+      - key: PROXYCALL_API_TOKEN
+        sync: false
       - key: RENDER_EXTERNAL_URL
         sync: true
       - key: TWILIO_ACCOUNT_SID

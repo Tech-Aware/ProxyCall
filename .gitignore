@@ -73,6 +73,8 @@ service_account.json
 **/service_account.json
 google-service-account*.json
 *service-account*.json
+supply-481013-9e6402534aa5.json
+**/supply-481013-9e6402534aa5.json
 
 # Twilio / local config
 config.local.py
