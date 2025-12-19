@@ -67,19 +67,20 @@ jobs:
 
       - name: Build binary (Windows)
         if: runner.os == 'Windows'
-        run: |
-          pyinstaller proxycall/__main__.py ^
-            --onefile ^
-            --name "${{ matrix.exe_name }}" ^
-            --console ^
-            --clean ^
-            --noconfirm ^
-            --exclude-module twilio ^
-            --exclude-module gspread ^
-            --exclude-module google ^
-            --exclude-module google.oauth2 ^
-            --exclude-module google.auth
+        run: >
+          pyinstaller proxycall/__main__.py
+          --onefile
+          --name "${{ matrix.exe_name }}"
+          --console
+          --clean
+          --noconfirm
+          --exclude-module twilio
+          --exclude-module gspread
+          --exclude-module google
+          --exclude-module google.oauth2
+          --exclude-module google.auth
         shell: pwsh
+
 
       # ===== SMOKE TEST =====
 
