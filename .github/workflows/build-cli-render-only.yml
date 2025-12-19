@@ -15,17 +15,14 @@ jobs:
           - os: macos-latest
             artifact_name: proxycall-cli-macos-render
             exe_name: proxycall-cli
-            sep: ":"
 
           - os: ubuntu-latest
             artifact_name: proxycall-cli-linux-render
             exe_name: proxycall-cli
-            sep: ":"
 
           - os: windows-latest
             artifact_name: proxycall-cli-windows-render
             exe_name: proxycall-cli.exe
-            sep: ";"
 
     runs-on: ${{ matrix.os }}
 
@@ -67,8 +64,8 @@ jobs:
             --collect-submodules proxycall \
             --collect-submodules app \
             --collect-submodules demo \
-            --collect-data demo
-      
+            --collect-data demo \
+            --hidden-import proxycall.env_loader
 
       - name: Build binary (Windows)
         if: runner.os == 'Windows'
@@ -84,8 +81,12 @@ jobs:
           --exclude-module google
           --exclude-module google.oauth2
           --exclude-module google.auth
+          --collect-submodules proxycall
+          --collect-submodules app
+          --collect-submodules demo
+          --collect-data demo
+          --hidden-import proxycall.env_loader
         shell: pwsh
-
 
       # ===== SMOKE TEST =====
 

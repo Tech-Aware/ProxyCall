@@ -1,18 +1,21 @@
 """Point d'entrée module pour lancer la CLI ProxyCall."""
 from __future__ import annotations
-from proxycall.env_loader import load_env_files
 
 
 from demo.cli import main
+from proxycall.env_loader import load_env_files, ensure_env_render_interactive
+
 
 
 def entrypoint() -> int:
     load_env_files()
+    ensure_env_render_interactive()
     return main()
 
 
 def entrypoint_live() -> int:
-    """Exécute la CLI directement en mode Dev (live)."""
+    load_env_files()
+    ensure_env_render_interactive()
     return main(["--live"])
 
 
