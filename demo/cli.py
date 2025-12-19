@@ -1756,7 +1756,8 @@ def make_pool_store(mode: str, args: argparse.Namespace, logger: logging.Logger)
 
 def interactive_menu(args: argparse.Namespace, store: ClientStore, pool_store: PoolStore, logger: logging.Logger) -> int:
     try:
-        print("\n=== ProxyCall DEMO ===")
+        print("\n=== ProxyCall ===")
+        print("Utilitaire de gestion d'un pool de numéro de proximité")
         print("Répondez par le numéro du menu. Tapez 0 pour quitter.\n")
         print(f"Mode sélectionné : {args.mode.upper()}\n")
 
