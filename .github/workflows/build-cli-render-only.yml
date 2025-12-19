@@ -63,7 +63,12 @@ jobs:
             --exclude-module gspread \
             --exclude-module google \
             --exclude-module google.oauth2 \
-            --exclude-module google.auth
+            --exclude-module google.auth \
+            --collect-submodules proxycall \
+            --collect-submodules app \
+            --collect-submodules demo \
+            --collect-data demo
+      
 
       - name: Build binary (Windows)
         if: runner.os == 'Windows'
