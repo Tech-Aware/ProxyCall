@@ -46,6 +46,7 @@ def _to_twilio_country_code(client_country_code: str) -> str:
     mapping = {
         "1": "US",  # USA/Canada - on privilégie US par défaut
         "33": "FR",
+        "32": "BE",
         "34": "ES",
         "39": "IT",
         "44": "GB",
