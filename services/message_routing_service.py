@@ -41,6 +41,14 @@ class MessageRoutingService:
         )
 
     @staticmethod
+    def _extract_otp(body: str) -> str:
+        body_clean = (body or "").strip()
+        m = OTP_RE.search(body_clean)
+        if m:
+            return m.group(1)
+        return re.sub(r"\D+", "", body_clean)
+
+    @staticmethod
     def _route_sms(*, proxy_number: str, sender_number: str, body: str) -> str:
         proxy_e164 = proxy_number if proxy_number.startswith("+") else f"+{proxy_number}"
         sender_e164 = sender_number if sender_number.startswith("+") else f"+{sender_number}"
@@ -62,7 +70,7 @@ class MessageRoutingService:
             pending_row = pending["row"]
 
             expected = str(rec.get("otp", "")).strip()
-            provided = ConfirmationPendingRepository.extract_otp(body)
+            provided = MessageRoutingService._extract_otp(body)
 
             logger.info(
                 "SMS de confirmation reçu (pending)",
@@ -80,7 +88,7 @@ class MessageRoutingService:
                 return MessageRoutingService._build_response("Code invalide. Réessayez.")
 
             # VERIFIED
-            ConfirmationPendingRepository.mark_verified(pending_row, headers)
+            ConfirmationPendingRepository.mark_verified(pending_row)
 
             # Promotion Clients + attachement proxy
             client = ConfirmationService.upsert_client_and_attach_proxy(
@@ -99,7 +107,7 @@ class MessageRoutingService:
             )
 
             # PROMOTED
-            ConfirmationPendingRepository.mark_promoted(pending_row, headers)
+            ConfirmationPendingRepository.mark_promoted(pending_row)
 
             return MessageRoutingService._build_response("Confirmation OK. Merci !")
 
