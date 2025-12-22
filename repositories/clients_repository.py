@@ -113,7 +113,7 @@ class ClientsRepository:
         # Les autres colonnes restent vides à la création
         # client_iso_residency, client_country_code, client_last_caller
 
-        sheet.append_row(row, value_input_option="RAW", table_range="A1")
+        sheet.append_row(row, value_input_option="RAW", table_range="A3")
 
         logger.info(
             "Client enregistré dans Sheets (aligné headers)",
