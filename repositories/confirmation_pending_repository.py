@@ -7,6 +7,13 @@ from integrations.sheets_client import SheetsClient
 
 logger = logging.getLogger(__name__)
 
+def _norm_cmp(num: str | None) -> str:
+    s = str(num or "").strip().replace(" ", "")
+    if s.startswith("+"):
+        s = s[1:]
+    return s
+
+
 
 class ConfirmationPendingRepository:
     REQUIRED = {"pending_id", "client_name", "client_mail", "client_real_phone", "proxy_number", "otp", "status", "created_at", "verified_at"}
@@ -68,6 +75,62 @@ class ConfirmationPendingRepository:
         # 6 digits cryptographically strong
         n = secrets.randbelow(10**length)
         return str(n).zfill(length)
+
+    @staticmethod
+    def find_pending(proxy_number: str, client_phone: str):
+        # Alias rétro-compatible vers la méthode existante
+        return ConfirmationPendingRepository.find_pending_by_proxy_and_phone(
+            proxy_number=proxy_number,
+            client_phone=client_phone,
+        )
+
+    @staticmethod
+    def find_pending_by_proxy_and_phone(*, proxy_number: str, client_phone: str) -> Optional[Dict[str, Any]]:
+        """
+        Retourne la ligne pending en status=PENDING qui match:
+        - proxy_number (To) == proxy_number stocké
+        - client_real_phone (From) == client_phone stocké
+        """
+        sheet = SheetsClient.get_confirmation_pending_sheet()
+        headers = ConfirmationPendingRepository._headers(sheet)
+        records = sheet.get_all_records()
+
+        proxy_cmp = _norm_cmp(proxy_number)
+        phone_cmp = _norm_cmp(client_phone)
+
+        for row_idx, rec in enumerate(records, start=2):
+            status = str(rec.get("status") or "").strip().upper()
+            if status != "PENDING":
+                continue
+
+            rec_proxy = _norm_cmp(rec.get("proxy_number"))
+            rec_phone = _norm_cmp(rec.get("client_real_phone"))
+
+            if rec_proxy == proxy_cmp and rec_phone == phone_cmp:
+                return {"row": row_idx, "record": rec, "headers": headers}
+
+        return None
+
+    @staticmethod
+    def mark_verified(row: int) -> None:
+        sheet = SheetsClient.get_confirmation_pending_sheet()
+        headers = ConfirmationPendingRepository._headers(sheet)
+        now = datetime.now(timezone.utc).isoformat()
+
+        sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "status"), "VERIFIED")
+        if "verified_at" in headers:
+            sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "verified_at"), now)
+
+        logger.info("CONFIRMATION_PENDING marqué VERIFIED", extra={"row": row})
+
+    @staticmethod
+    def mark_promoted(row: int) -> None:
+        sheet = SheetsClient.get_confirmation_pending_sheet()
+        headers = ConfirmationPendingRepository._headers(sheet)
+
+        sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "status"), "PROMOTED")
+        logger.info("CONFIRMATION_PENDING marqué PROMOTED", extra={"row": row})
+
 
     @staticmethod
     def expire_older_than(hours: int = 48) -> list[dict[str, str]]:
