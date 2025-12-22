@@ -96,6 +96,126 @@ class PoolsRepository:
         return available
 
     @staticmethod
+    def reserve_first_available_pending(
+            *,
+            country_iso: str,
+            number_type: str,
+            pending_id: str,
+            attribution_to_client_name: str = "",
+            max_tries: int = 10,
+            stale_after_minutes: int = 10,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Réserve un numéro pour une demande pending (sans client_id).
+        - status -> reserved
+        - reserved_token = pending_id
+        - reserved_at = now
+        - reserved_by_client_id = "" (vide)
+        - attribution_to_client_name peut être rempli (col G)
+        - date_attribution reste vide (col F)
+        """
+        try:
+            sheet = SheetsClient.get_pools_sheet()
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Impossible d'ouvrir la feuille TwilioPools", exc_info=exc)
+            return None
+
+        country = (country_iso or "").strip().upper()
+        requested = (number_type or "mobile").strip().lower()
+        if requested == "national":
+            requested = "local"
+
+        def _is_stale_reserved(status: str, reserved_at: str) -> bool:
+            st = (status or "").strip().lower()
+            if st != "reserved":
+                return False
+            if not reserved_at:
+                return True
+            try:
+                t = datetime.fromisoformat(str(reserved_at).replace("Z", ""))
+            except Exception:
+                return True
+            return t < (datetime.utcnow() - timedelta(minutes=stale_after_minutes))
+
+        logger.info(
+            "[magenta]POOL[/magenta] reserve_pending start country=%s type=%s pending_id=%s",
+            country,
+            requested,
+            pending_id,
+        )
+
+        for attempt in range(max_tries):
+            try:
+                values = sheet.get_all_values()
+            except Exception as exc:  # pragma: no cover
+                logger.exception("Impossible de lire TwilioPools (get_all_values)", exc_info=exc)
+                return None
+
+            if not values or len(values) < 2:
+                return None
+
+            data_rows = values[1:]  # header
+            for row_index, row in enumerate(data_rows, start=2):
+                c_iso = (row[0] if len(row) > 0 else "").strip().upper()
+                phone = (row[1] if len(row) > 1 else "").strip()
+                status = (row[2] if len(row) > 2 else "").strip().lower()
+                ntype = (row[7] if len(row) > 7 else "").strip().lower()
+                reserved_at_existing = (row[9] if len(row) > 9 else "").strip()
+
+                if c_iso != country:
+                    continue
+                if ntype != requested:
+                    continue
+                if status != "available" and not _is_stale_reserved(status, reserved_at_existing):
+                    continue
+
+                now = datetime.utcnow().isoformat()
+
+                try:
+                    # C status -> reserved
+                    sheet.update(f"C{row_index}:C{row_index}", [["reserved"]])
+
+                    # G attribution_to_client_name (optionnel)
+                    if attribution_to_client_name is not None:
+                        sheet.update(f"G{row_index}:G{row_index}", [[attribution_to_client_name]])
+
+                    # I/J/K : token, reserved_at, reserved_by_client_id (vide)
+                    sheet.update(f"I{row_index}:K{row_index}", [[str(pending_id), now, ""]])
+                except Exception as exc:  # pragma: no cover
+                    logger.exception("Impossible de réserver un numéro (update pending)", exc_info=exc)
+                    continue
+
+                # check I matches
+                try:
+                    check = sheet.get(f"I{row_index}")
+                    current_token = (check[0][0] if check and check[0] else "")
+                except Exception:
+                    current_token = ""
+
+                if str(current_token).strip() == str(pending_id).strip():
+                    logger.info(
+                        "[magenta]POOL[/magenta] reserve_pending ok row=%s phone=****%s",
+                        row_index,
+                        phone[-4:] if phone else "",
+                    )
+                    return {
+                        "row_index": str(row_index),
+                        "phone_number": phone,
+                        "reserved_token": str(pending_id),
+                        "reserved_at": now,
+                    }
+
+                logger.warning(
+                    "[magenta]POOL[/magenta] reserve_pending conflict retry attempt=%s row=%s",
+                    attempt + 1,
+                    row_index,
+                )
+                break
+
+        logger.warning("[magenta]POOL[/magenta] reserve_pending failed (no candidate)")
+        return None
+
+    @staticmethod
     def reserve_first_available(
         *,
         country_iso: str,
@@ -212,6 +332,49 @@ class PoolsRepository:
 
         logger.warning("[magenta]POOL[/magenta] reserve failed (no candidate)")
         return None
+
+    @staticmethod
+    def release_reservation_by_token(*, reserved_token: str) -> int:
+        """
+        Libère (retour 'available') toutes les lignes TwilioPools dont reserved_token == token
+        et status == reserved.
+        Retourne le nombre de lignes libérées.
+        """
+        token = str(reserved_token or "").strip()
+        if not token:
+            return 0
+
+        try:
+            sheet = SheetsClient.get_pools_sheet()
+            values = sheet.get_all_values()
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Impossible de lire TwilioPools pour release", exc_info=exc)
+            return 0
+
+        if not values or len(values) < 2:
+            return 0
+
+        count = 0
+        data_rows = values[1:]
+        for row_index, row in enumerate(data_rows, start=2):
+            status = (row[2] if len(row) > 2 else "").strip().lower()
+            tok = (row[8] if len(row) > 8 else "").strip()  # I = reserved_token
+            if status == "reserved" and tok == token:
+                try:
+                    # status -> available
+                    sheet.update(f"C{row_index}:C{row_index}", [["available"]])
+                    # clear I/J/K
+                    sheet.update(f"I{row_index}:K{row_index}", [["", "", ""]])
+                    # optional: clear attribution_to_client_name (G) because it was only pending context
+                    sheet.update(f"G{row_index}:G{row_index}", [[""]])
+                    count += 1
+                except Exception as exc:  # pragma: no cover
+                    logger.exception("Release failed row=%s", row_index, exc_info=exc)
+                    continue
+
+        logger.info("[magenta]POOL[/magenta] release_reservation_by_token token=%s released=%s", token, count)
+        return count
+
 
     @staticmethod
     def finalize_assignment_keep_friendly(
@@ -452,3 +615,27 @@ class PoolsRepository:
             date_attribution=date_attribution,
             attribution_to_client_name=attribution_to_client_name,
         )
+
+        @staticmethod
+        def find_row_by_phone_number(phone_number: str) -> Optional[dict]:
+            """Retourne {'row_index': int, 'record': dict} pour phone_number (col B = phone_number)."""
+            try:
+                sheet = SheetsClient.get_pools_sheet()
+                records = sheet.get_all_records()
+            except Exception as exc:  # pragma: no cover
+                logger.exception("Impossible de lire TwilioPools", exc_info=exc)
+                return None
+
+            target = str(phone_number or "").strip().replace(" ", "")
+            if not target.startswith("+"):
+                target = "+" + target
+
+            for row_idx, rec in enumerate(records, start=2):
+                rec_phone = str(rec.get("phone_number") or "").strip().replace(" ", "")
+                if rec_phone and not rec_phone.startswith("+"):
+                    rec_phone = "+" + rec_phone
+                if rec_phone == target:
+                    return {"row_index": row_idx, "record": rec}
+
+            return None
+

@@ -43,3 +43,9 @@ class SheetsClient:
         """Retourne la feuille 'TwilioPools' pour le pool de numéros."""
         sh = _get_gc().open(settings.GOOGLE_SHEET_NAME)
         return sh.worksheet("TwilioPools")
+
+    @staticmethod
+    def get_confirmation_pending_sheet():
+        sh = _get_gc().open(settings.GOOGLE_SHEET_NAME)
+        return sh.worksheet("CONFIRMATION_PENDING")
+

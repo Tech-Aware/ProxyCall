@@ -29,9 +29,9 @@ def provision(
     country_iso: str = Body(...),
     batch_size: int = Body(1),
     number_type: str = Body("mobile"),
-    require_sms_capability: bool = Body(True),
-    require_voice_capability: bool = Body(True),
-    candidates_limit: int = Body(10),
+    require_sms_capability: bool = Body(False),
+    require_voice_capability: bool = Body(False),
+    candidates_limit: int = Body(100),
 ):
     try:
         purchased = TwilioClient.fill_pool(

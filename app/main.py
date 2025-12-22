@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException, status, Depends
 
 from api import orders, twilio_webhook, clients, pool
 from api.twilio_webhook import router as twilio_router
+from api import orders, twilio_webhook, clients, pool, confirmations
 from app.config import settings
 
 
@@ -57,4 +58,5 @@ app.include_router(orders.router, prefix="/orders", tags=["Orders"], dependencie
 app.include_router(clients.router, prefix="/clients", tags=["Clients"], dependencies=[Depends(verify_api_token)])
 app.include_router(pool.router, prefix="/pool", tags=["Pool"], dependencies=[Depends(verify_api_token)])
 app.include_router(twilio_webhook.router, prefix="/twilio", tags=["Twilio"])
+app.include_router(confirmations.router, prefix="/confirmations", tags=["Confirmations"])
 app.include_router(twilio_router)

@@ -3,13 +3,18 @@
 import logging
 from typing import Callable
 
+import re
+
 from twilio.twiml.messaging_response import MessagingResponse
 
 from app.logging_config import mask_phone
 from integrations.twilio_client import TwilioClient
 from repositories.clients_repository import ClientsRepository
+from repositories.confirmation_pending_repository import ConfirmationPendingRepository
+from services.confirmation_service import ConfirmationService
 from services.clients_service import extract_country_code
 
+OTP_RE = re.compile(r"\b(\d{4,8})\b")  # 4 à 8 chiffres
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,56 @@ class MessageRoutingService:
                 "body_preview": (body[:80] + "..." if len(body) > 80 else body),
             },
         )
+
+        pending = ConfirmationPendingRepository.find_pending(proxy_e164, sender_e164)
+        if pending:
+            rec = pending["record"]
+            headers = pending["headers"]
+            pending_row = pending["row"]
+
+            expected = str(rec.get("otp", "")).strip()
+            provided = ConfirmationPendingRepository.extract_otp(body)
+
+            logger.info(
+                "SMS de confirmation reçu (pending)",
+                extra={
+                    "proxy_number": mask_phone(proxy_e164),
+                    "sender_number": mask_phone(sender_e164),
+                    "pending_id": rec.get("pending_id"),
+                },
+            )
+
+            if not expected:
+                return MessageRoutingService._build_response(
+                    "Erreur: code introuvable. Contactez le support."
+                )
+
+            if provided != expected:
+                return MessageRoutingService._build_response("Code invalide. Réessayez.")
+
+            # 1) VERIFIED
+            ConfirmationPendingRepository.mark_verified(pending_row, headers)
+
+            # 2) Promotion Clients + attachement proxy
+            client = ConfirmationService.upsert_client_and_attach_proxy(
+                client_name=str(rec.get("client_name") or "").strip(),
+                client_mail=str(rec.get("client_mail") or "").strip(),
+                client_real_phone=str(rec.get("client_real_phone") or "").strip(),
+                proxy_number=str(rec.get("proxy_number") or "").strip(),
+            )
+
+            # 3) Finalisation TwilioPools (assigned, date_attribution, attribution_to_client_name, reserved_by_client_id)
+            ConfirmationService.finalize_pool_assignment(
+                proxy_number=str(rec.get("proxy_number") or "").strip(),
+                pending_id=str(rec.get("pending_id") or "").strip(),
+                client_id=str(client.client_id),
+                attribution_to_client_name=str(rec.get("client_name") or "").strip(),
+            )
+
+            # 4) PROMOTED
+            ConfirmationPendingRepository.mark_promoted(pending_row, headers)
+
+            return MessageRoutingService._build_response("Confirmation OK. Merci !")
 
         client = ClientsRepository.get_by_proxy_number(proxy_e164)
         if not client:
