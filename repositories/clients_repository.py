@@ -88,21 +88,32 @@ class ClientsRepository:
     @staticmethod
     def save(client: Client) -> None:
         """
-        Ajoute une nouvelle ligne en respectant l'ordre des colonnes de la feuille (headers).
+        Ajoute une nouvelle ligne en respectant l'ordre des colonnes de la feuille (headers),
+        SANS écrire dans F/G (sinon ça casse les ARRAYFORMULA).
         """
         sheet = SheetsClient.get_clients_sheet()
         headers = [str(h or "").strip() for h in sheet.row_values(1)]
         if not headers:
             raise RuntimeError("Feuille Clients: ligne 1 (headers) vide")
 
-        # Ligne vide alignée sur la largeur des headers
-        row = [""] * len(headers)
+        # On écrit uniquement jusqu'à client_proxy_number (col E normalement)
+        try:
+            last_write_col = headers.index("client_proxy_number") + 1  # 1-indexé
+        except ValueError:
+            raise RuntimeError("Colonne 'client_proxy_number' introuvable dans la feuille Clients.")
+
+        # Ligne alignée mais tronquée (A..E) -> F/G/H restent VRAIMENT vides
+        row = [""] * last_write_col
 
         def setv(col: str, val: str):
             if col not in headers:
                 logger.warning("Colonne absente dans Clients, valeur ignorée", extra={"col": col})
                 return
-            row[headers.index(col)] = val
+            idx = headers.index(col)
+            if idx >= last_write_col:
+                # sécurité : on n'écrit pas au-delà de last_write_col
+                return
+            row[idx] = val
 
         setv("client_id", str(client.client_id))
         setv("client_name", str(client.client_name or ""))
@@ -110,25 +121,37 @@ class ClientsRepository:
         setv("client_real_phone", str(client.client_real_phone or ""))
         setv("client_proxy_number", str(client.client_proxy_number or ""))
 
-        # Les autres colonnes restent vides à la création
-        # client_iso_residency, client_country_code, client_last_caller
-
+        # Append à partir de A3, sans toucher ligne 2
         sheet.append_row(row, value_input_option="RAW", table_range="A3")
 
+        # Récupère la ligne réellement ajoutée (après append)
+        # get_all_values inclut la ligne 1 (headers) + ligne 2 (array formulas)
+        new_row_index = len(sheet.get_all_values())
+
+        # Filet de sécurité : on clear F/G sur la nouvelle ligne
+        # (clear => cellule vraiment vide, arrayformula peut s'y déverser)
+        try:
+            sheet.batch_clear([f"F{new_row_index}:G{new_row_index}"])
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Impossible de clear F/G après append", exc_info=exc)
+
         logger.info(
-            "Client enregistré dans Sheets (aligné headers)",
+            "Client enregistré dans Sheets (aligné headers, F/G laissées vides)",
             extra={
                 "client_id": client.client_id,
                 "proxy_number": mask_phone(str(client.client_proxy_number or "")),
+                "row": new_row_index,
             },
         )
 
     @staticmethod
     def update(client: Client) -> None:
-        """Met à jour un client existant ou l'ajoute s'il est absent."""
+        """Met à jour un client existant ou l'ajoute s'il est absent.
+        Important: on ne doit JAMAIS écrire dans F/G, et on clear F/G après update.
+        """
         try:
             sheet = SheetsClient.get_clients_sheet()
-            headers = sheet.row_values(1)
+            headers = [str(h or "").strip() for h in sheet.row_values(1)]
             records = sheet.get_all_records()
         except Exception as exc:  # pragma: no cover - dépendances externes
             logger.exception(
@@ -167,10 +190,8 @@ class ClientsRepository:
 
         updates = []
         for header, value in updated_map.items():
+            # On protège F/G
             if header in {"client_iso_residency", "client_country_code"}:
-                logger.info(
-                    "Colonne protégée ignorée lors de la mise à jour", extra={"colonne": header}
-                )
                 continue
             try:
                 col_idx = headers.index(header) + 1
@@ -187,23 +208,22 @@ class ClientsRepository:
 
             updates.append({"range": f"{_column_letter(col_idx)}{target_row}", "values": [[value]]})
 
-        if not updates:
-            logger.info(
-                "Aucune mise à jour nécessaire pour le client (colonnes protégées conservées)",
-                extra={"client_id": client.client_id},
-            )
-            return
+        if updates:
+            try:
+                sheet.batch_update(updates)
+                logger.info(
+                    "Client mis à jour dans Sheets (F/G non modifiées)",
+                    extra={"client_id": client.client_id, "row": target_row},
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.exception("Impossible de mettre à jour le client dans Sheets", exc_info=exc)
+                return
 
+        # Filet de sécurité: clear F/G sur la ligne (au cas où elles auraient été "occupées" par un vieux run)
         try:
-            sheet.batch_update(updates)
-            logger.info(
-                "Client mis à jour dans Sheets (colonnes F et G préservées)",
-                extra={"client_id": client.client_id, "row": target_row},
-            )
-        except Exception as exc:  # pragma: no cover - dépendances externes
-            logger.exception(
-                "Impossible de mettre à jour le client dans Sheets", exc_info=exc
-            )
+            sheet.batch_clear([f"F{target_row}:G{target_row}"])
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Impossible de clear F/G après update", exc_info=exc)
 
     @staticmethod
     def get_max_client_id() -> int:
