@@ -2,8 +2,13 @@ import logging
 import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
+import re
+OTP_RE = re.compile(r"\b(\d{4,8})\b")  # 4 à 8 chiffres
 
 from integrations.sheets_client import SheetsClient
+
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -176,3 +181,12 @@ class ConfirmationPendingRepository:
 
         logger.info("CONFIRMATION_PENDING expired", extra={"count": len(expired)})
         return expired
+
+    @staticmethod
+    def extract_otp(body: str) -> str:
+        body_clean = (body or "").strip()
+        m = OTP_RE.search(body_clean)
+        if m:
+            return m.group(1)
+        return re.sub(r"\D+", "", body_clean)
+

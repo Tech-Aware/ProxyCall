@@ -50,6 +50,8 @@ class MessageRoutingService:
 
     @staticmethod
     def _route_sms(*, proxy_number: str, sender_number: str, body: str) -> str:
+        logger.info("MESSAGE_ROUTING_VERSION=v2-otpfix")
+
         proxy_e164 = proxy_number if proxy_number.startswith("+") else f"+{proxy_number}"
         sender_e164 = sender_number if sender_number.startswith("+") else f"+{sender_number}"
 
