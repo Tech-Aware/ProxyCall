@@ -375,6 +375,33 @@ class PoolsRepository:
         logger.info("[magenta]POOL[/magenta] release_reservation_by_token token=%s released=%s", token, count)
         return count
 
+    @staticmethod
+    def find_row_by_phone_number(phone_number: str) -> Optional[Dict[str, object]]:
+        """
+        Recherche une ligne TwilioPools par phone_number (E.164).
+        Retour:
+          {"row_index": "<int>", "record": <dict>} ou None
+        """
+        try:
+            normalized = phone_e164_strict(phone_number, field="phone_number")
+        except ValidationIssue as exc:
+            logger.error("[magenta]POOL[/magenta] find_row_by_phone_number invalid phone=%s err=%s", phone_number, exc)
+            return None
+
+        try:
+            sheet = SheetsClient.get_pools_sheet()
+            records = sheet.get_all_records(numericise_ignore=["all"])
+        except Exception as exc:  # pragma: no cover
+            logger.exception("[magenta]POOL[/magenta] find_row_by_phone_number failed to read TwilioPools", exc_info=exc)
+            return None
+
+        for row_idx, rec in enumerate(records, start=2):  # ligne 1 = headers
+            rec_phone = str(rec.get("phone_number") or "").strip()
+            if rec_phone == normalized:
+                return {"row_index": str(row_idx), "record": rec}
+
+        logger.info("[magenta]POOL[/magenta] find_row_by_phone_number miss phone=****%s", normalized[-4:])
+        return None
 
     @staticmethod
     def finalize_assignment_keep_friendly(
