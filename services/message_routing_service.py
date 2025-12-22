@@ -111,7 +111,22 @@ class MessageRoutingService:
             # PROMOTED
             ConfirmationPendingRepository.mark_promoted(pending_row)
 
-            return MessageRoutingService._build_response("Confirmation OK. Merci !")
+            # 5) Notifier explicitement le client (ne pas dépendre du TwiML reply)
+            try:
+                TwilioClient.send_sms(
+                    from_number=proxy_e164,
+                    to_number=sender_e164,
+                    body="Confirmation OK. Merci !",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Impossible d'envoyer le SMS de confirmation au client",
+                    exc_info=exc,
+                    extra={"proxy_number": mask_phone(proxy_e164), "sender_number": mask_phone(sender_e164)},
+                )
+
+            # TwiML vide (on a déjà envoyé un SMS sortant)
+            return MessageRoutingService._build_response()
 
         # 2) Routage “normal” via Clients
         client = ClientsRepository.get_by_proxy_number(proxy_e164)

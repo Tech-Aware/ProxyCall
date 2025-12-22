@@ -1,4 +1,5 @@
 import logging
+from app.logging_config import mask_phone
 from typing import Optional
 from models.client import Client
 from integrations.sheets_client import SheetsClient
@@ -87,26 +88,40 @@ class ClientsRepository:
     @staticmethod
     def save(client: Client) -> None:
         """
-        Version simple : on ajoute une nouvelle ligne.
-        Hypothèse pour l’instant : on n’appelle pas save plusieurs fois
-        pour le même client_id (sinon tu auras des doublons).
+        Ajoute une nouvelle ligne en respectant l'ordre des colonnes de la feuille (headers).
         """
-        try:
-            sheet = SheetsClient.get_clients_sheet()
-            row = [
-                client.client_id,
-                client.client_name,
-                client.client_mail,
-                client.client_real_phone,
-                client.client_proxy_number,
-            ]
-            sheet.append_row(row)
-            logger.info(
-                "Client enregistré dans Sheets",
-                extra={"client_id": client.client_id, "proxy": client.client_proxy_number},
-            )
-        except Exception as exc:  # pragma: no cover - dépendances externes
-            logger.exception("Impossible d'enregistrer le client dans Sheets", exc_info=exc)
+        sheet = SheetsClient.get_clients_sheet()
+        headers = [str(h or "").strip() for h in sheet.row_values(1)]
+        if not headers:
+            raise RuntimeError("Feuille Clients: ligne 1 (headers) vide")
+
+        # Ligne vide alignée sur la largeur des headers
+        row = [""] * len(headers)
+
+        def setv(col: str, val: str):
+            if col not in headers:
+                logger.warning("Colonne absente dans Clients, valeur ignorée", extra={"col": col})
+                return
+            row[headers.index(col)] = val
+
+        setv("client_id", str(client.client_id))
+        setv("client_name", str(client.client_name or ""))
+        setv("client_mail", str(client.client_mail or ""))
+        setv("client_real_phone", str(client.client_real_phone or ""))
+        setv("client_proxy_number", str(client.client_proxy_number or ""))
+
+        # Les autres colonnes restent vides à la création
+        # client_iso_residency, client_country_code, client_last_caller
+
+        sheet.append_row(row, value_input_option="RAW")
+
+        logger.info(
+            "Client enregistré dans Sheets (aligné headers)",
+            extra={
+                "client_id": client.client_id,
+                "proxy_number": mask_phone(str(client.client_proxy_number or "")),
+            },
+        )
 
     @staticmethod
     def update(client: Client) -> None:
