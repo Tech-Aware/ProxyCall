@@ -4,7 +4,4 @@ twilio
 gspread
 google-auth
 python-dotenv
-pytest
-rich
-httpx
 python-multipart
