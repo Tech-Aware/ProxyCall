@@ -1,8 +1,15 @@
 # ProxyCall
 
-Ce dépôt regroupe les services et intégrations permettant de gérer l'attribution de numéros proxy et le routage des appels. Les tests sont désormais centralisés dans le dossier `tests` et un script unique permet de lancer toute la suite.
+ProxyCall est l'API FastAPI déployée sur Render pour gérer l'attribution de numéros proxy, le routage des appels Twilio et la synchronisation avec Google Sheets. Le dépôt a été allégé pour ne conserver que ce qui est nécessaire à l'exécution du service en production.
 
-## Installation rapide
+## Périmètre conservé après nettoyage
+
+- **Routes API métiers** : `/orders`, `/clients`, `/pool`, `/confirmations`, `/twilio/voice` restent servies par FastAPI (voir `app/main.py` et `api/`).
+- **Webhook Twilio** : les webhooks voix sont toujours routés via `api/twilio_webhook.py` et le démarrage se fait via `python -m app.run`.
+- **Accès Sheets** : les services `repositories`/`services` continuent d'utiliser `gspread` et `google-auth` présents dans `requirements.txt`.
+- **Sécurité** : le header `Authorization: Bearer <token>` reste exigé si `PROXYCALL_API_TOKEN` est défini côté serveur.
+
+## Installation minimale (local)
 
 1. Créez un environnement virtuel et installez les dépendances :
    ```bash
@@ -10,80 +17,22 @@ Ce dépôt regroupe les services et intégrations permettant de gérer l'attribu
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-2. Configurez les variables d'environnement nécessaires pour les services Twilio et Google Sheets lorsque vous souhaitez exécuter les tests live (voir ci-dessous).
+2. Définissez les variables d'environnement attendues (Twilio, Google, URL publique).
 
-## Exécution des tests
+## Lancement local de l'API
 
-Le dossier `tests` contient trois catégories principales de scénarios, exécutables via `pytest`.
-
-### 1. Tests unitaires et de service
-- **Objectif :** valider la logique métier (routage d'appel, gestion des commandes, clients, interactions Twilio simulées, etc.).
-- **Fichiers concernés :**
-  - `tests/test_call_routing_service.py`
-  - `tests/test_clients_service.py`
-  - `tests/test_orders_service.py`
-  - `tests/test_sheets_client_unit.py`
-  - `tests/test_twilio_client_unit.py`
-  - `tests/test_demo_scenarios.py`
-- **Commande (PyCharm/terminal) :**
-  ```bash
-  python -m pytest tests/test_call_routing_service.py
-  ```
-  Ajustez le chemin vers le fichier ou utilisez `-k` pour cibler un test en particulier.
-
-### 2. Tests démo hors-ligne
-- **Objectif :** présenter les flux principaux sans appeler de services externes.
-- **Fichiers concernés :**
-  - `tests/client_repository_demo_test.py`
-  - `tests/test_sheets_access_demo_test.py`
-  - `tests/twilio_pools_demo_test.py`
-- **Commande :**
-  ```bash
-  python -m pytest tests/client_repository_demo_test.py
-  ```
-  Ces tests peuvent être lancés sans configuration supplémentaire.
-
-### 3. Tests live (intégrations réelles)
-- **Objectif :** vérifier l'accès réel aux APIs Twilio et Google Sheets.
-- **Fichiers concernés :**
-  - `tests/client_repository_live_test.py`
-  - `tests/test_sheets_access_live_test.py`
-- **Activation :** par défaut ces tests sont ignorés. Pour les exécuter, définissez les variables requises :
-  ```bash
-  export PROXYCALL_RUN_LIVE=1
-  export TWILIO_ACCOUNT_SID="..."
-  export TWILIO_AUTH_TOKEN="..."
-  export GOOGLE_SERVICE_ACCOUNT_FILE="path/vers/credentials.json"
-  export GOOGLE_SHEET_NAME="NomDuSheet"
-  python -m pytest tests/test_sheets_access_live_test.py
-  ```
-
-### Script unique
-Pour exécuter l'ensemble des tests (unitaires, démo et live si les variables sont présentes), utilisez le script dédié depuis la racine du projet :
+Le point d'entrée standard utilise `app.run`, qui normalise automatiquement la variable `PORT` (utile sur Render) et configure une journalisation détaillée :
 ```bash
-./run_tests.sh
+PUBLIC_BASE_URL="https://exemple.local" \
+TWILIO_ACCOUNT_SID="..." \
+TWILIO_AUTH_TOKEN="..." \
+GOOGLE_SHEET_NAME="NomDuSheet" \
+GOOGLE_SERVICE_ACCOUNT_FILE="/chemin/vers/credentials.json" \
+python -m app.run
 ```
-Vous pouvez lui passer des arguments `pytest` supplémentaires, par exemple `./run_tests.sh -k call_routing`.
+
+> **Sécurité :** si `PROXYCALL_API_TOKEN` est défini, toutes les routes métier exigent un header `Authorization: Bearer <token>`.
 
 ## Déploiement Render
 
-Un blueprint Render (`render.yaml`) est fourni pour déployer l'API FastAPI sur Render avec `uvicorn app.main:app`. Le guide détaillé et la préparation de la CLI (.env.render pour l'URL/token uniquement) sont décrits dans `docs/deploiement_render.md`.
-
-Pour consommer le backend depuis n'importe quel poste (ex. Windows), la CLI envoie par défaut les commandes (`create-client`, `pool-list`, etc.) vers l'API Render sécurisée par `PROXYCALL_API_TOKEN` (mode Render par défaut, basé sur `.env.render`).
-
-### Distribution légère de la CLI
-- Construire le bundle manuellement : `python -m pip install build && python -m build` génère une archive wheel/zip (`dist/`).
-- **Publication PyPI en une commande** : `python scripts/publier_sur_pypi.py`.
-  - Identifiants attendus dans l'environnement : `TWINE_USERNAME=__token__` et `TWINE_PASSWORD=pypi-xxxxxxxx` (ou `testpypi-xxxxxxxx`).
-  - Sous PowerShell (PyCharm ou terminal Windows) :
-    ```powershell
-    $Env:TWINE_USERNAME="__token__"
-    $Env:TWINE_PASSWORD="pypi-xxxxxxxx"
-    python scripts/publier_sur_pypi.py
-    ```
-  - Option `--dry-run` pour s'arrêter après le build.
-  - Le script incrémente automatiquement le patch de version dans `pyproject.toml` à chaque exécution (0.1.0 → 0.1.1 → 0.1.2, etc.) pour éviter les collisions PyPI ; conservez le contrôle manuel en éditant la version avant d'appeler le script si besoin.
-- Installation : `pip install proxycall-cli` (ou `pip install dist/proxycall_cli-<version>-py3-none-any.whl`).
-- Utilisation (Render par défaut) : `proxycall-cli ...` ou `python -m proxycall ...` ; aucune option n'est requise pour cibler Render.
-- Mode Dev (Twilio/Google) : utilisez le binaire `proxycall-cli-live` (ou l'option `--live`) et fournissez les variables Twilio/Google via `.env` ou l'environnement.
-- La CLI charge automatiquement `.env` puis `.env.render` à partir du répertoire courant ou de ses parents (résolution `find_dotenv`), sans dépendre de la racine du dépôt.
+Le blueprint Render (`render.yaml`) reste la référence pour déployer l'API. Le guide détaillé est dans `docs/deploiement_render.md`.
