@@ -116,7 +116,7 @@ class MessageRoutingService:
                 TwilioClient.send_sms(
                     from_number=proxy_e164,
                     to_number=sender_e164,
-                    body="Confirmation OK. Merci !",
+                    body="Confirmation OK. Merci ! Enregistre ce numéro pour tes prochaines livraison !",
                 )
             except Exception as exc:
                 logger.warning(

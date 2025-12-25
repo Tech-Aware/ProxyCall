@@ -77,9 +77,16 @@ class ConfirmationPendingRepository:
 
     @staticmethod
     def generate_otp(length: int = 6) -> str:
-        # 6 digits cryptographically strong
-        n = secrets.randbelow(10**length)
-        return str(n).zfill(length)
+        """
+        Génère un OTP numérique de `length` chiffres, dont le premier chiffre n'est jamais 0.
+        Exemple length=6 -> 100000..999999
+        """
+        if length < 2:
+            raise ValueError("OTP length must be >= 2")
+
+        first = secrets.randbelow(9) + 1  # 1..9
+        rest = secrets.randbelow(10 ** (length - 1))  # 0 .. 10^(n-1)-1
+        return f"{first}{rest:0{length - 1}d}"
 
     @staticmethod
     def find_pending(proxy_number: str, client_phone: str):
