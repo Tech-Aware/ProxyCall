@@ -83,6 +83,9 @@ def create_confirmation(payload: CreateConfirmationPayload = Body(...)):
             pending_id=pending_id,
             proxy_number=proxy_number,
             otp=otp,
+            client_name=client_name,
+            client_mail=client_mail,
+            client_real_phone=client_phone,
         )
 
         # 4) S'assurer webhooks Twilio OK (utile pour la réponse SMS)
