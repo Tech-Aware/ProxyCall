@@ -86,6 +86,62 @@ class ClientsRepository:
         return None
 
     @staticmethod
+    def find_by_email_or_phone(client_mail: str | None, client_real_phone: str | None) -> Optional[Client]:
+        """
+        Recherche un client par email (case-insensitive) ou numéro de téléphone (normalisé sans '+').
+        Retourne le premier match trouvé ou None si rien ne correspond.
+        """
+        try:
+            sheet = SheetsClient.get_clients_sheet()
+            records = sheet.get_all_records()
+        except Exception as exc:  # pragma: no cover - dépendances externes
+            logger.exception("Impossible de lire la feuille Clients", exc_info=exc)
+            return None
+
+        email_cmp = str(client_mail or "").strip().lower()
+        phone_raw = str(client_real_phone or "").strip().replace(" ", "")
+        phone_cmp = phone_raw[1:] if phone_raw.startswith("+") else phone_raw
+
+        logger.info(
+            "Recherche client par email ou téléphone",
+            extra={"email": email_cmp or None, "phone": mask_phone(phone_raw) if phone_raw else None},
+        )
+
+        for rec in records:
+            rec_email = str(rec.get("client_mail") or "").strip().lower()
+            rec_phone = str(rec.get("client_real_phone") or "").strip().replace(" ", "")
+            rec_phone_cmp = rec_phone[1:] if rec_phone.startswith("+") else rec_phone
+
+            if email_cmp and rec_email and rec_email == email_cmp:
+                logger.info("Client trouvé par email", extra={"client_id": rec.get("client_id")})
+                return Client(
+                    client_id=rec.get("client_id"),
+                    client_name=rec.get("client_name"),
+                    client_mail=rec.get("client_mail"),
+                    client_real_phone=rec.get("client_real_phone"),
+                    client_proxy_number=rec.get("client_proxy_number"),
+                    client_iso_residency=rec.get("client_iso_residency"),
+                    client_country_code=rec.get("client_country_code"),
+                    client_last_caller=rec.get("client_last_caller"),
+                )
+
+            if phone_cmp and rec_phone_cmp and rec_phone_cmp == phone_cmp:
+                logger.info("Client trouvé par téléphone", extra={"client_id": rec.get("client_id")})
+                return Client(
+                    client_id=rec.get("client_id"),
+                    client_name=rec.get("client_name"),
+                    client_mail=rec.get("client_mail"),
+                    client_real_phone=rec.get("client_real_phone"),
+                    client_proxy_number=rec.get("client_proxy_number"),
+                    client_iso_residency=rec.get("client_iso_residency"),
+                    client_country_code=rec.get("client_country_code"),
+                    client_last_caller=rec.get("client_last_caller"),
+                )
+
+        logger.info("Aucun client correspondant à l'email ou au téléphone fourni", extra={"email": email_cmp})
+        return None
+
+    @staticmethod
     def save(client: Client) -> None:
         """
         Ajoute une nouvelle ligne en respectant l'ordre des colonnes de la feuille (headers),
@@ -267,4 +323,3 @@ class ClientsRepository:
                     extra={"proxy": proxy_number, "last_caller": caller_number, "row": row_idx},
                 )
                 return
-
