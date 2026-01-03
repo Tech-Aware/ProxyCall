@@ -235,10 +235,26 @@ class ClientsRepository:
 
         # Filet de sécurité : on clear F/G sur la nouvelle ligne
         # (clear => cellule vraiment vide, arrayformula peut s'y déverser)
+        clear_range = f"F{new_row_index}:G{new_row_index}"
         try:
-            sheet.batch_clear([f"F{new_row_index}:G{new_row_index}"])
+            sheet.batch_clear([clear_range])
+            logger.info(
+                "Colonnes F/G vidées après création du client",
+                extra={
+                    "client_id": client.client_id,
+                    "row": new_row_index,
+                    "range": clear_range,
+                },
+            )
         except Exception as exc:  # pragma: no cover
-            logger.warning("Impossible de clear F/G après append", exc_info=exc)
+            logger.error(
+                "Impossible de vider les colonnes F/G après append",
+                exc_info=exc,
+                extra={"client_id": client.client_id, "row": new_row_index, "range": clear_range},
+            )
+            raise RuntimeError(
+                "Echec du nettoyage des colonnes F/G lors de la création du client."
+            ) from exc
 
         logger.info(
             "Client enregistré dans Sheets (aligné headers, F/G laissées vides)",

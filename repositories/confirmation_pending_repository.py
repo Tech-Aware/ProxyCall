@@ -47,7 +47,15 @@ class ConfirmationPendingRepository:
         return None
 
     @staticmethod
-    def set_proxy_and_otp(*, pending_id: str, proxy_number: str, otp: str) -> None:
+    def set_proxy_and_otp(
+        *,
+        pending_id: str,
+        proxy_number: str,
+        otp: str,
+        client_name: str | None = None,
+        client_mail: str | None = None,
+        client_real_phone: str | None = None,
+    ) -> None:
         sheet = SheetsClient.get_confirmation_pending_sheet()
         hit = ConfirmationPendingRepository.get_by_pending_id(pending_id)
         if not hit:
@@ -57,9 +65,35 @@ class ConfirmationPendingRepository:
         headers = hit["headers"]
         now = datetime.now(timezone.utc).isoformat()
 
-        sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "proxy_number"), str(proxy_number))
-        sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "otp"), str(otp))
-        sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "status"), "PENDING")
+        def _update_cell(column: str, value: str, *, required: bool = False) -> None:
+            try:
+                col_idx = ConfirmationPendingRepository._col(headers, column)
+            except RuntimeError as exc:
+                if required:
+                    raise
+                logger.warning(
+                    "Colonne absente dans CONFIRMATION_PENDING, mise à jour ignorée",
+                    exc_info=exc,
+                    extra={"pending_id": pending_id, "column": column},
+                )
+                return
+
+            sheet.update_cell(row, col_idx, value)
+            logger.info(
+                "CONFIRMATION_PENDING cellule mise à jour",
+                extra={"pending_id": pending_id, "column": column, "row": row},
+            )
+
+        _update_cell("proxy_number", str(proxy_number), required=True)
+        _update_cell("otp", str(otp), required=True)
+        _update_cell("status", "PENDING", required=True)
+
+        if client_name is not None:
+            _update_cell("client_name", str(client_name))
+        if client_mail is not None:
+            _update_cell("client_mail", str(client_mail))
+        if client_real_phone is not None:
+            _update_cell("client_real_phone", str(client_real_phone))
 
         # created_at rempli seulement si vide
         created_col = ConfirmationPendingRepository._col(headers, "created_at")
@@ -72,8 +106,21 @@ class ConfirmationPendingRepository:
 
         if not str(existing_created or "").strip():
             sheet.update_cell(row, created_col, now)
+            logger.info(
+                "CONFIRMATION_PENDING horodatage créé",
+                extra={"pending_id": pending_id, "row": row, "created_at": now},
+            )
 
-        logger.info("CONFIRMATION_PENDING set proxy+otp", extra={"pending_id": pending_id})
+        logger.info(
+            "CONFIRMATION_PENDING set proxy+otp avec données client en clair",
+            extra={
+                "pending_id": pending_id,
+                "row": row,
+                "client_mail_present": client_mail is not None,
+                "client_phone_present": client_real_phone is not None,
+                "client_name_present": client_name is not None,
+            },
+        )
 
     @staticmethod
     def generate_otp(length: int = 6) -> str:

@@ -12,12 +12,30 @@ class _FakeSheet:
         self._rows = rows
         self.updates = []
         self.cleared = []
+        self.appended_rows = []
 
     def row_values(self, row_index: int):
         return self._rows.get(row_index, [])
 
     def get_all_records(self):
         return self._records
+
+    def get_all_values(self):
+        max_row = max(self._rows.keys(), default=0)
+        return [self._rows.get(idx, []) for idx in range(1, max_row + 1)]
+
+    def append_row(self, row, value_input_option=None, table_range=None):
+        new_row_index = max(self._rows.keys(), default=0) + 1
+        self._rows[new_row_index] = row
+        self.appended_rows.append(
+            {
+                "row": row,
+                "value_input_option": value_input_option,
+                "table_range": table_range,
+                "row_index": new_row_index,
+            }
+        )
+        return new_row_index
 
     def batch_update(self, updates):
         self.updates.append(updates)
@@ -37,6 +55,12 @@ class _ProtectedSheet(_FakeSheet):
     def update(self, range_label, values):
         super().update(range_label, values)
         raise Exception("Protected cell")
+
+
+class _FailingClearSheet(_FakeSheet):
+    def batch_clear(self, ranges):
+        super().batch_clear(ranges)
+        raise Exception("Clear failed")
 
 
 class ClientsRepositoryUpdateTests(unittest.TestCase):
@@ -123,6 +147,62 @@ class ClientsRepositoryUpdateTests(unittest.TestCase):
 
         self.assertIn("B3", flat_ranges)
         self.assertIn("C3", flat_ranges)
+
+
+class ClientsRepositorySaveTests(unittest.TestCase):
+    def test_save_clears_columns_f_and_g_on_creation(self):
+        headers = [
+            "client_id",
+            "client_name",
+            "client_mail",
+            "client_real_phone",
+            "client_proxy_number",
+            "client_iso_residency",
+            "client_country_code",
+        ]
+        records = []
+        rows = {1: headers, 2: ["", "", "", "", "", "", ""]}
+        sheet = _FakeSheet(headers, records, rows)
+
+        new_client = Client(
+            client_id="10",
+            client_name="Test Client",
+            client_mail="test@mail.test",
+            client_real_phone="+33123456789",
+            client_proxy_number="+33999888777",
+        )
+
+        with patch("repositories.clients_repository.SheetsClient.get_clients_sheet", return_value=sheet):
+            ClientsRepository.save(new_client)
+
+        self.assertTrue(sheet.cleared, "Les colonnes F/G doivent être vidées après la création")
+        self.assertIn(["F3:G3"], sheet.cleared)
+
+    def test_save_raises_when_clear_columns_fail(self):
+        headers = [
+            "client_id",
+            "client_name",
+            "client_mail",
+            "client_real_phone",
+            "client_proxy_number",
+            "client_iso_residency",
+            "client_country_code",
+        ]
+        records = []
+        rows = {1: headers, 2: ["", "", "", "", "", "", ""]}
+        sheet = _FailingClearSheet(headers, records, rows)
+
+        new_client = Client(
+            client_id="11",
+            client_name="Client Clear Error",
+            client_mail="error@mail.test",
+            client_real_phone="+33999999999",
+            client_proxy_number="+33888888888",
+        )
+
+        with patch("repositories.clients_repository.SheetsClient.get_clients_sheet", return_value=sheet):
+            with self.assertRaises(RuntimeError):
+                ClientsRepository.save(new_client)
 
 
 if __name__ == "__main__":
