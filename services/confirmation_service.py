@@ -121,7 +121,15 @@ class ConfirmationService:
             client.client_mail = email_cmp
             client.client_real_phone = _e164(client_real_phone)
             client.client_proxy_number = proxy_e164
-            ClientsRepository.update(client)
+            try:
+                ClientsRepository.update(client)
+            except Exception as exc:
+                logger.error(
+                    "Echec de mise à jour du client dans Sheets lors de l'attachement du proxy",
+                    exc_info=exc,
+                    extra={"client_id": client.client_id, "proxy": mask_phone(proxy_e164)},
+                )
+                raise
 
             logger.info(
                 "Client upsert (update) + proxy attaché",
