@@ -149,6 +149,9 @@ class ClientsRepository:
         """Met à jour un client existant ou l'ajoute s'il est absent.
         Important: on ne doit JAMAIS écrire dans F/G, et on clear F/G après update.
         """
+        DATA_START_ROW = 3  # Ligne 2 réservée aux formules (ARRAYFORMULA)
+        PROTECTED_HINTS = ("protected", "protection", "edit a protected cell", "protected range")
+
         try:
             sheet = SheetsClient.get_clients_sheet()
             headers = [str(h or "").strip() for h in sheet.row_values(1)]
@@ -161,6 +164,9 @@ class ClientsRepository:
 
         target_row = None
         for row_idx, rec in enumerate(records, start=2):
+            # Ligne 2 réservée, on commence réellement à partir de la ligne 3
+            if row_idx < DATA_START_ROW:
+                continue
             if str(rec.get("client_id")) == str(client.client_id):
                 target_row = row_idx
                 break
@@ -216,8 +222,34 @@ class ClientsRepository:
                     extra={"client_id": client.client_id, "row": target_row},
                 )
             except Exception as exc:  # pragma: no cover
-                logger.exception("Impossible de mettre à jour le client dans Sheets", exc_info=exc)
-                return
+                msg_lower = str(exc).lower()
+                protected = any(hint in msg_lower for hint in PROTECTED_HINTS)
+                logger.exception(
+                    "Impossible de mettre à jour le client dans Sheets",
+                    exc_info=exc,
+                    extra={"client_id": client.client_id, "row": target_row, "updates": updates},
+                )
+                if protected:
+                    try:
+                        ClientsRepository.save(client)
+                        logger.info(
+                            "Client ajouté en nouvelle ligne suite à une cellule protégée",
+                            extra={"client_id": client.client_id, "row_origine": target_row},
+                        )
+                        return
+                    except Exception as exc_fallback:  # pragma: no cover
+                        logger.exception(
+                            "Echec du fallback d'ajout après protection",
+                            exc_info=exc_fallback,
+                            extra={"client_id": client.client_id},
+                        )
+                        raise RuntimeError(
+                            "Mise à jour du client refusée (cellule protégée) et échec du fallback d'ajout."
+                        ) from exc_fallback
+
+                raise RuntimeError(
+                    "Mise à jour du client refusée : erreur lors de l'écriture dans la feuille Clients."
+                ) from exc
 
         # Filet de sécurité: clear F/G sur la ligne (au cas où elles auraient été "occupées" par un vieux run)
         try:
@@ -259,6 +291,8 @@ class ClientsRepository:
         records = sheet.get_all_records()
 
         for row_idx, rec in enumerate(records, start=2):  # ligne 1 = header
+            if row_idx < 3:
+                continue
             rec_proxy_norm = str(rec.get("client_proxy_number") or "").strip().replace(" ", "").replace("+", "")
             if rec_proxy_norm and rec_proxy_norm == target_norm:
                 sheet.update_cell(row_idx, last_caller_col, str(caller_number))
@@ -267,4 +301,3 @@ class ClientsRepository:
                     extra={"proxy": proxy_number, "last_caller": caller_number, "row": row_idx},
                 )
                 return
-
