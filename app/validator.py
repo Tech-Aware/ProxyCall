@@ -1,9 +1,12 @@
 # app/validator.py
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
+
+from app.logging_config import mask_phone
 
 
 # =========================
@@ -32,6 +35,9 @@ _RE_EMAIL_STRICT = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")  # simple + strict 
 # =========================
 # Helpers
 # =========================
+logger = logging.getLogger(__name__)
+
+
 def _s(v: Any) -> str:
     return str(v if v is not None else "").strip()
 
@@ -103,21 +109,46 @@ def phone_e164_strict(value: Any, *, field: str = "phone") -> str:
     """
     Hyper strict:
     - must be +[digits] only
-    - rejects "00.." and local formats, and rejects separators/spaces.
+    - normalise automatiquement les numéros sans '+' ou préfixés par "00" s'ils sont valides
+    - rejette les séparateurs/espaces.
     """
     raw = _s(value)
     if not raw:
         raise ValidationIssue("valeur manquante", field=field)
 
-    # Explicitly reject common variants
-    if raw.startswith("00"):
-        raise ValidationIssue("doit commencer par '+' (E.164 strict), pas '00...'", field=field, value=raw)
-
     _reject_phone_separators(raw, field=field)
 
-    if not _RE_E164_STRICT.match(raw):
+    normalized = raw
+
+    # Conversion 00XX... -> +XX...
+    if raw.startswith("00"):
+        candidate = f"+{raw[2:]}"
+        if _RE_E164_STRICT.match(candidate):
+            normalized = candidate
+            logger.info(
+                "Numéro normalisé de 00 à E.164 strict",
+                extra={"field": field, "normalized": mask_phone(normalized)},
+            )
+        else:
+            raise ValidationIssue(
+                "doit commencer par '+' (E.164 strict), pas '00...'",
+                field=field,
+                value=raw,
+            )
+
+    # Ajout automatique du préfixe manquant si le numéro est constitué uniquement de chiffres
+    if not normalized.startswith("+") and normalized.isdigit():
+        candidate = f"+{normalized}"
+        if _RE_E164_STRICT.match(candidate):
+            normalized = candidate
+            logger.info(
+                "Préfixe '+' ajouté automatiquement",
+                extra={"field": field, "normalized": mask_phone(normalized)},
+            )
+
+    if not _RE_E164_STRICT.match(normalized):
         raise ValidationIssue("format E.164 strict requis (ex: +33601020304)", field=field, value=raw)
-    return raw
+    return normalized
 
 
 def iso_country_strict(value: Any, *, field: str = "country_iso") -> str:
