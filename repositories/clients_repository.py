@@ -161,14 +161,46 @@ class ClientsRepository:
             )
             return
 
+        try:
+            client_id_col_idx = headers.index("client_id") + 1
+        except ValueError:
+            logger.error(
+                "Colonne 'client_id' introuvable dans la feuille Clients : mise à jour impossible",
+                extra={"client_id": client.client_id},
+            )
+            return
+
+        # get_all_records() peut ignorer les lignes vides/protégées (ex: ligne 2),
+        # on scanne donc la colonne ID directement pour récupérer l'index de ligne réel.
         target_row = None
-        for row_idx, rec in enumerate(records, start=2):
-            # Ligne 2 réservée, on commence réellement à partir de la ligne 3
-            if row_idx < DATA_START_ROW:
-                continue
-            if str(rec.get("client_id")) == str(client.client_id):
-                target_row = row_idx
-                break
+        try:
+            client_id_column_values = sheet.col_values(client_id_col_idx)
+        except AttributeError:
+            client_id_column_values = None
+            logger.warning(
+                "Méthode col_values indisponible sur la feuille, bascule sur get_all_records",
+                extra={"client_id": client.client_id},
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.exception(
+                "Impossible de lire la colonne client_id dans Sheets", exc_info=exc
+            )
+            return
+
+        if client_id_column_values is not None:
+            for row_idx, value in enumerate(client_id_column_values, start=1):
+                if row_idx < DATA_START_ROW:
+                    continue
+                if str(value).strip() == str(client.client_id):
+                    target_row = row_idx
+                    break
+        else:
+            for row_idx, rec in enumerate(records, start=2):
+                if row_idx < DATA_START_ROW:
+                    continue
+                if str(rec.get("client_id")) == str(client.client_id):
+                    target_row = row_idx
+                    break
 
         if target_row is None:
             logger.warning(
@@ -193,17 +225,28 @@ class ClientsRepository:
             "client_last_caller": existing_map.get("client_last_caller", ""),
         }
 
+        # À partir de la première colonne protégée (iso/country), on n'écrit plus rien
+        protected_headers = [h for h in ("client_iso_residency", "client_country_code") if h in headers]
+        first_protected_col = min(
+            [headers.index(h) + 1 for h in protected_headers],
+            default=len(headers) + 1,
+        )
+
         updates = []
         for header, value in updated_map.items():
-            # On protège F/G
-            if header in {"client_iso_residency", "client_country_code"}:
-                continue
             try:
                 col_idx = headers.index(header) + 1
             except ValueError:
                 logger.warning(
                     "Colonne absente dans la feuille, mise à jour ignorée",
                     extra={"colonne": header, "client_id": client.client_id},
+                )
+                continue
+
+            if col_idx >= first_protected_col:
+                logger.info(
+                    "Mise à jour ignorée car colonne protégée",
+                    extra={"colonne": header, "client_id": client.client_id, "col_idx": col_idx},
                 )
                 continue
 
