@@ -1,6 +1,14 @@
 import logging
+from typing import List, Optional
+
+try:  # pragma: no cover - dépendance externe
+    from gspread.exceptions import APIError
+except Exception:  # pragma: no cover - gspread absent lors des tests unitaires
+    class APIError(Exception):  # type: ignore
+        """Fallback local pour éviter un ImportError en environnement de test."""
+        pass
+
 from app.logging_config import mask_phone
-from typing import Optional
 from models.client import Client
 from integrations.sheets_client import SheetsClient
 
@@ -51,6 +59,47 @@ class ClientsRepository:
                 )
         logger.info("Client introuvable dans Sheets", extra={"client_id": client_id})
         return None
+
+    @staticmethod
+    def _is_protected_cell_error(exc: Exception) -> bool:
+        """Détecte si une erreur gspread est liée à une cellule protégée."""
+        if isinstance(exc, APIError):
+            message = str(getattr(exc, "response", "") or "").lower()
+            if not message:
+                message = str(exc).lower()
+        else:
+            message = str(exc).lower()
+
+        keywords = ["protected cell", "protected range", "protected", "cellules protégées"]
+        return any(keyword in message for keyword in keywords)
+
+    @staticmethod
+    def _apply_updates_with_protection_fallback(sheet, updates: List[dict], client_id: str) -> List[str]:
+        """
+        Tente d'appliquer les mises à jour une par une pour identifier les cellules protégées.
+        Retourne la liste des plages restées bloquées.
+        """
+        blocked_ranges: List[str] = []
+
+        for update in updates:
+            range_label = update.get("range")
+            values = update.get("values")
+
+            try:
+                sheet.update(range_label, values)
+                logger.info(
+                    "Mise à jour unitaire appliquée après échec batch",
+                    extra={"client_id": client_id, "range": range_label, "values": values},
+                )
+            except Exception as cell_exc:  # pragma: no cover - dépendances externes
+                blocked_ranges.append(str(range_label))
+                logger.warning(
+                    "Cellule protégée détectée : mise à jour ignorée",
+                    exc_info=cell_exc,
+                    extra={"client_id": client_id, "range": range_label},
+                )
+
+        return blocked_ranges
 
     @staticmethod
     def get_by_proxy_number(proxy_number: str) -> Optional[Client]:
@@ -264,18 +313,24 @@ class ClientsRepository:
                     extra={"client_id": client.client_id, "row": target_row},
                 )
             except Exception as exc:  # pragma: no cover
-                protected = "protect" in str(exc).lower()
                 logger.exception(
-                    "Impossible de mettre à jour le client dans Sheets",
+                    "Impossible de mettre à jour le client dans Sheets (batch)",
                     exc_info=exc,
                     extra={"client_id": client.client_id, "row": target_row, "updates": updates},
                 )
-                message = (
-                    "Mise à jour du client refusée : cellules protégées dans la feuille Clients."
-                    if protected
-                    else "Mise à jour du client refusée : erreur lors de l'écriture dans la feuille Clients."
-                )
-                raise RuntimeError(message) from exc
+
+                if ClientsRepository._is_protected_cell_error(exc):
+                    blocked = ClientsRepository._apply_updates_with_protection_fallback(
+                        sheet, updates, str(client.client_id)
+                    )
+                    if blocked:
+                        raise RuntimeError(
+                            "Mise à jour du client refusée : cellules protégées dans la feuille Clients.",
+                        ) from exc
+                else:
+                    raise RuntimeError(
+                        "Mise à jour du client refusée : erreur lors de l'écriture dans la feuille Clients.",
+                    ) from exc
 
         # Filet de sécurité: clear F/G sur la ligne (au cas où elles auraient été "occupées" par un vieux run)
         try:

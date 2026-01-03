@@ -22,6 +22,9 @@ class _FakeSheet:
     def batch_update(self, updates):
         self.updates.append(updates)
 
+    def update(self, range_label, values):
+        self.updates.append({"range": range_label, "values": values})
+
     def batch_clear(self, ranges):
         self.cleared.append(ranges)
 
@@ -30,6 +33,10 @@ class _ProtectedSheet(_FakeSheet):
     def batch_update(self, updates):
         super().batch_update(updates)
         raise Exception("Protected range")
+
+    def update(self, range_label, values):
+        super().update(range_label, values)
+        raise Exception("Protected cell")
 
 
 class ClientsRepositoryUpdateTests(unittest.TestCase):
@@ -104,6 +111,18 @@ class ClientsRepositoryUpdateTests(unittest.TestCase):
         with patch("repositories.clients_repository.SheetsClient.get_clients_sheet", return_value=sheet):
             with self.assertRaises(RuntimeError):
                 ClientsRepository.update(updated_client)
+
+        # Le fallback unitaire doit avoir été tenté et consigné
+        self.assertTrue(sheet.updates, "Aucune tentative de mise à jour unitaire")
+        flat_ranges = []
+        for item in sheet.updates:
+            if isinstance(item, list):
+                flat_ranges.extend([elt["range"] for elt in item])
+            elif isinstance(item, dict):
+                flat_ranges.append(item.get("range"))
+
+        self.assertIn("B3", flat_ranges)
+        self.assertIn("C3", flat_ranges)
 
 
 if __name__ == "__main__":
