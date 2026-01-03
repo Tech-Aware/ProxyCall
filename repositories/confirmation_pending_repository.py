@@ -143,6 +143,22 @@ class ConfirmationPendingRepository:
         sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "status"), "PROMOTED")
         logger.info("CONFIRMATION_PENDING marqué PROMOTED", extra={"row": row})
 
+    @staticmethod
+    def mark_updated(row: int, details: str) -> None:
+        """
+        Met à jour le statut en UPDATED avec un détail explicite sur les champs modifiés.
+        Example: UPDATED (mail), UPDATED (telephone), UPDATED (mail + telephone)
+        """
+        sheet = SheetsClient.get_confirmation_pending_sheet()
+        headers = ConfirmationPendingRepository._headers(sheet)
+
+        status_value = f"UPDATED ({details})" if details else "UPDATED"
+        sheet.update_cell(row, ConfirmationPendingRepository._col(headers, "status"), status_value)
+        logger.info(
+            "CONFIRMATION_PENDING marqué UPDATED",
+            extra={"row": row, "details": details or "none"},
+        )
+
 
     @staticmethod
     def expire_older_than(hours: int = 48) -> list[dict[str, str]]:
@@ -196,4 +212,3 @@ class ConfirmationPendingRepository:
         if m:
             return m.group(1)
         return re.sub(r"\D+", "", body_clean)
-

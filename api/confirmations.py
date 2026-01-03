@@ -7,6 +7,7 @@ from app.config import settings
 from app.validator import phone_e164_strict, email_strict, name_strict, iso_country_strict, number_type_strict, ValidationIssue
 from app.logging_config import mask_phone
 from integrations.twilio_client import TwilioClient
+from repositories.clients_repository import ClientsRepository
 from repositories.pools_repository import PoolsRepository
 from repositories.confirmation_pending_repository import ConfirmationPendingRepository
 
@@ -43,17 +44,35 @@ def create_confirmation(payload: CreateConfirmationPayload = Body(...)):
         country_iso = iso_country_strict(payload.country_iso or settings.TWILIO_PHONE_COUNTRY, field="country_iso")
         number_type = number_type_strict(payload.number_type or settings.TWILIO_NUMBER_TYPE, field="number_type")
 
-        # 1) Réservation pool (pending) avec fallback automatique si le type demandé est saturé
-        reservation, effective_type = _reserve_pending_with_fallback(
-            country_iso=country_iso,
-            requested_type=number_type,
-            pending_id=pending_id,
-            attribution_to_client_name=client_name,  # tu as choisi de le conserver
-        )
+        proxy_number = None
+        effective_type = number_type
 
-        proxy_number = str(reservation.get("phone_number") or "").strip()
-        if not proxy_number:
-            raise RuntimeError("Proxy réservé invalide")
+        existing_client = ClientsRepository.find_by_email_or_phone(client_mail, client_phone)
+        if existing_client and existing_client.client_proxy_number:
+            proxy_number = phone_e164_strict(
+                existing_client.client_proxy_number, field="client_proxy_number"
+            )
+            effective_type = "existant"
+            logger.info(
+                "Réutilisation du proxy existant pour confirmation",
+                extra={
+                    "pending_id": pending_id,
+                    "client_id": existing_client.client_id,
+                    "proxy": mask_phone(proxy_number),
+                },
+            )
+        else:
+            # 1) Réservation pool (pending) avec fallback automatique si le type demandé est saturé
+            reservation, effective_type = _reserve_pending_with_fallback(
+                country_iso=country_iso,
+                requested_type=number_type,
+                pending_id=pending_id,
+                attribution_to_client_name=client_name,  # tu as choisi de le conserver
+            )
+
+            proxy_number = str(reservation.get("phone_number") or "").strip()
+            if not proxy_number:
+                raise RuntimeError("Proxy réservé invalide")
 
         # 2) Générer OTP
         otp = ConfirmationPendingRepository.generate_otp(6)
@@ -81,6 +100,7 @@ def create_confirmation(payload: CreateConfirmationPayload = Body(...)):
                 "proxy": mask_phone(proxy_number),
                 "to": mask_phone(client_phone),
                 "number_type": effective_type,
+                "reuse_proxy": bool(existing_client and existing_client.client_proxy_number),
             },
         )
         return {

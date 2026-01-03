@@ -93,12 +93,14 @@ class MessageRoutingService:
             ConfirmationPendingRepository.mark_verified(pending_row)
 
             # Promotion Clients + attachement proxy
-            client = ConfirmationService.upsert_client_and_attach_proxy(
+            upsert_result = ConfirmationService.upsert_client_and_attach_proxy(
                 client_name=str(rec.get("client_name") or "").strip(),
                 client_mail=str(rec.get("client_mail") or "").strip(),
                 client_real_phone=str(rec.get("client_real_phone") or "").strip(),
                 proxy_number=str(rec.get("proxy_number") or "").strip(),
+                pending_id=str(rec.get("pending_id") or "").strip(),
             )
+            client = upsert_result.client
 
             # Finalisation pool
             ConfirmationService.finalize_pool_assignment(
@@ -108,8 +110,17 @@ class MessageRoutingService:
                 attribution_to_client_name=str(rec.get("client_name") or "").strip(),
             )
 
-            # PROMOTED
-            ConfirmationPendingRepository.mark_promoted(pending_row)
+            # PROMOTED ou UPDATED selon le scénario
+            if upsert_result.created:
+                ConfirmationPendingRepository.mark_promoted(pending_row)
+            else:
+                if not upsert_result.updated_fields:
+                    details = "aucune modification de contact"
+                elif upsert_result.updated_fields == {"mail", "telephone"}:
+                    details = "mail + telephone"
+                else:
+                    details = " et ".join(sorted(upsert_result.updated_fields))
+                ConfirmationPendingRepository.mark_updated(pending_row, details)
 
             # 5) Notifier explicitement le client (ne pas dépendre du TwiML reply)
             try:
