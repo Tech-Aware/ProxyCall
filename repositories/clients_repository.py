@@ -448,7 +448,10 @@ class ClientsRepository:
                 continue
             rec_proxy_norm = str(rec.get("client_proxy_number") or "").strip().replace(" ", "").replace("+", "")
             if rec_proxy_norm and rec_proxy_norm == target_norm:
-                sheet.update_cell(row_idx, last_caller_col, str(caller_number))
+                # Préfixe apostrophe pour forcer le format texte dans Sheets
+                # (évite que +39... soit interprété comme une formule)
+                value = f"'{caller_number}" if not str(caller_number).startswith("'") else str(caller_number)
+                sheet.update_cell(row_idx, last_caller_col, value)
                 logger.info(
                     "client_last_caller mis à jour",
                     extra={"proxy": proxy_number, "last_caller": caller_number, "row": row_idx},
