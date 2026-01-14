@@ -13,6 +13,40 @@ from services.clients_service import extract_country_code
 
 logger = logging.getLogger(__name__)
 
+# Indicatifs pays de l'Union Européenne + EEE + Suisse
+EU_COUNTRY_CODES = {
+    "+30",   # Grèce
+    "+31",   # Pays-Bas
+    "+32",   # Belgique
+    "+33",   # France
+    "+34",   # Espagne
+    "+351",  # Portugal
+    "+352",  # Luxembourg
+    "+353",  # Irlande
+    "+354",  # Islande (EEE)
+    "+356",  # Malte
+    "+357",  # Chypre
+    "+358",  # Finlande
+    "+359",  # Bulgarie
+    "+36",   # Hongrie
+    "+370",  # Lituanie
+    "+371",  # Lettonie
+    "+372",  # Estonie
+    "+385",  # Croatie
+    "+386",  # Slovénie
+    "+39",   # Italie
+    "+40",   # Roumanie
+    "+41",   # Suisse
+    "+420",  # République tchèque
+    "+421",  # Slovaquie
+    "+43",   # Autriche
+    "+45",   # Danemark
+    "+46",   # Suède
+    "+47",   # Norvège (EEE)
+    "+48",   # Pologne
+    "+49",   # Allemagne
+}
+
 OTP_RE = re.compile(r"\b(\d{4,8})\b")  # 4 à 8 chiffres
 
 
@@ -156,12 +190,22 @@ class MessageRoutingService:
             extra={"client_country_code": client_cc, "sender_country_code": sender_cc},
         )
 
-        if client_cc and client_cc != sender_cc:
+        # Vérifier si l'expéditeur est dans la zone EU/EEE/Suisse
+        sender_in_eu = any(sender_cc.startswith(code) for code in EU_COUNTRY_CODES) if sender_cc else False
+
+        if not sender_in_eu:
             logger.warning(
-                "SMS bloqué : indicatif différent",
+                f"SMS bloqué : hors zone EU (client={client_cc}, expéditeur={sender_cc})",
                 extra={"client_country_code": client_cc, "sender_country_code": sender_cc},
             )
             return MessageRoutingService._build_response("Ce numéro n'est pas accessible depuis votre pays.")
+
+        # Log informatif si indicatif différent mais EU autorisé
+        if client_cc and client_cc != sender_cc:
+            logger.info(
+                f"SMS EU autorisé malgré indicatif différent (client={client_cc}, expéditeur={sender_cc})",
+                extra={"client_country_code": client_cc, "sender_country_code": sender_cc},
+            )
 
         real_e164 = (
             client.client_real_phone
