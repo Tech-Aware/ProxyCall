@@ -221,12 +221,19 @@ class ConfirmationService:
         if not reserved_at:
             reserved_at = datetime.now(timezone.utc).isoformat()
 
-        if rec_status == "assigned" and rec_reserved_client == str(client_id):
-            logger.info(
-                "TwilioPools déjà assigné au client, réutilisation sans réécriture",
-                extra={"row": row_index, "proxy": mask_phone(proxy_e164), "client_id": client_id},
-            )
-            return
+        if rec_status == "assigned":
+            if rec_reserved_client == str(client_id):
+                logger.info(
+                    "TwilioPools déjà assigné au client, réutilisation sans réécriture",
+                    extra={"row": row_index, "proxy": mask_phone(proxy_e164), "client_id": client_id},
+                )
+                return
+            else:
+                # SÉCURITÉ: Empêcher la réattribution d'un proxy déjà assigné à un autre client
+                raise RuntimeError(
+                    f"Ce proxy est déjà assigné à un autre client "
+                    f"(client_id actuel: {rec_reserved_client}, demandé: {client_id})"
+                )
 
         PoolsRepository.finalize_assignment_keep_friendly(
             row_index=row_index,

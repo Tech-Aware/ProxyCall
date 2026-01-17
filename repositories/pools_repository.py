@@ -437,6 +437,22 @@ class PoolsRepository:
             logger.warning("[magenta]POOL[/magenta] finalize token mismatch row=%s", row_index)
             return False
 
+        # SÉCURITÉ: Vérifier que le client_id correspond (si déjà assigné)
+        try:
+            check_client = sheet.get(f"K{row_index}")
+            current_client_id = str((check_client[0][0] if check_client and check_client[0] else "")).strip()
+        except Exception:
+            current_client_id = ""
+
+        if current_client_id and current_client_id != str(reserved_by_client_id):
+            logger.warning(
+                "[magenta]POOL[/magenta] finalize client_id mismatch row=%s (current=%s, requested=%s)",
+                row_index,
+                current_client_id,
+                reserved_by_client_id,
+            )
+            return False
+
         date_attr = date_attribution or datetime.utcnow().isoformat()
         attr_name = attribution_to_client_name or ""
 
