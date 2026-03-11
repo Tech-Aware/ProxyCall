@@ -13,10 +13,10 @@ from integrations.sheets_client import SheetsClient
 logger = logging.getLogger(__name__)
 
 def _norm_cmp(num: str | None) -> str:
-    s = str(num or "").strip().replace(" ", "")
-    if s.startswith("+"):
-        s = s[1:]
-    return s
+    raw = str(num or "").strip()
+    if not raw:
+        return ""
+    return re.sub(r"\D+", "", raw)
 
 
 
