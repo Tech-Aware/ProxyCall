@@ -129,13 +129,15 @@ class TwilioClient:
                 return False
 
             current = (getattr(incoming[0], "voice_url", "") or "").strip()
-            if current == target:
+            current_method = (getattr(incoming[0], "voice_method", "") or "").strip().upper()
+            if current == target and current_method == "POST":
                 return False
 
-            incoming[0].update(voice_url=target)
+            incoming[0].update(voice_url=target, voice_method="POST")
             logger.info(
-                "[cyan]Twilio[/cyan] voice_url updated number=%s",
+                "[cyan]Twilio[/cyan] voice webhook updated number=%s method=%s",
                 mask_phone(pn),
+                "POST",
             )
             return True
 
@@ -172,13 +174,15 @@ class TwilioClient:
                 return False
 
             current = (getattr(incoming[0], "sms_url", "") or "").strip()
-            if current == target:
+            current_method = (getattr(incoming[0], "sms_method", "") or "").strip().upper()
+            if current == target and current_method == "POST":
                 return False
 
-            incoming[0].update(sms_url=target)
+            incoming[0].update(sms_url=target, sms_method="POST")
             logger.info(
-                "[cyan]Twilio[/cyan] sms_url updated number=%s",
+                "[cyan]Twilio[/cyan] sms webhook updated number=%s method=%s",
                 mask_phone(pn),
+                "POST",
             )
             return True
 
