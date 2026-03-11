@@ -1,5 +1,6 @@
 # api/twilio_webhook.py
 import logging
+import re
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -13,13 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_e164_like(num: str | None) -> str:
-    """Nettoie le numéro : strip, retire espaces, ajoute + si besoin."""
+    """Nettoie le numéro Twilio (E.164 ou préfixé whatsapp:) en format +digits."""
     if not num:
         return ""
-    p = str(num).strip().replace(" ", "")
-    if not p.startswith("+"):
-        p = "+" + p
-    return p
+    digits = re.sub(r"\D+", "", str(num))
+    if not digits:
+        return ""
+    if digits.startswith("00"):
+        digits = digits[2:]
+    return "+" + digits
 
 
 @router.post("/twilio/voice")
