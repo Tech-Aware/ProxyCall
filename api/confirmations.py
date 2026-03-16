@@ -74,6 +74,17 @@ def create_confirmation(payload: CreateConfirmationPayload = Body(...)):
             if not proxy_number:
                 raise RuntimeError("Proxy réservé invalide")
 
+            logger.info(
+                "Proxy réservé depuis le pool",
+                extra={
+                    "pending_id": pending_id,
+                    "proxy": mask_phone(proxy_number),
+                    "requested_type": number_type,
+                    "effective_type": effective_type,
+                    "is_fallback": effective_type != number_type,
+                },
+            )
+
         # 2) Générer OTP
         otp = ConfirmationPendingRepository.generate_otp(6)
 
@@ -89,8 +100,27 @@ def create_confirmation(payload: CreateConfirmationPayload = Body(...)):
         )
 
         # 4) S'assurer webhooks Twilio OK (utile pour la réponse SMS)
-        TwilioClient.ensure_messaging_webhook(proxy_number)
-        TwilioClient.ensure_voice_webhook(proxy_number)
+        webhook_sms_ok = TwilioClient.ensure_messaging_webhook(proxy_number)
+        webhook_voice_ok = TwilioClient.ensure_voice_webhook(proxy_number)
+        if not webhook_sms_ok:
+            logger.error(
+                "Webhook SMS non configurable — la vérification OTP par SMS ne fonctionnera pas",
+                extra={"pending_id": pending_id, "proxy": mask_phone(proxy_number)},
+            )
+        if not webhook_voice_ok:
+            logger.warning(
+                "Webhook voice non configurable",
+                extra={"pending_id": pending_id, "proxy": mask_phone(proxy_number)},
+            )
+        logger.info(
+            "Webhooks configurés",
+            extra={
+                "pending_id": pending_id,
+                "proxy": mask_phone(proxy_number),
+                "sms_webhook_ok": webhook_sms_ok,
+                "voice_webhook_ok": webhook_voice_ok,
+            },
+        )
 
         # 5) Envoyer SMS OTP
         body = f"ProxyCall - Code de confirmation: {otp}"

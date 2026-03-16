@@ -157,17 +157,45 @@ class ConfirmationPendingRepository:
         proxy_cmp = _norm_cmp(proxy_number)
         phone_cmp = _norm_cmp(client_phone)
 
+        logger.info(
+            "find_pending_by_proxy_and_phone: recherche parmi %d records (proxy=%s, phone=%s)",
+            len(records),
+            proxy_cmp[-4:] if len(proxy_cmp) >= 4 else proxy_cmp,
+            phone_cmp[-4:] if len(phone_cmp) >= 4 else phone_cmp,
+        )
+
         for row_idx, rec in enumerate(records, start=2):
             status = str(rec.get("status") or "").strip().upper()
-            if status != "PENDING":
-                continue
-
             rec_proxy = _norm_cmp(rec.get("proxy_number"))
             rec_phone = _norm_cmp(rec.get("client_real_phone"))
 
+            proxy_match = rec_proxy == proxy_cmp
+            phone_match = rec_phone == phone_cmp
+
+            if proxy_match and phone_match and status != "PENDING":
+                logger.warning(
+                    "find_pending: proxy+phone matchent mais status=%s (row=%d, pending_id=%s)",
+                    status,
+                    row_idx,
+                    rec.get("pending_id", "?"),
+                )
+                continue
+
+            if status != "PENDING":
+                continue
+
             if rec_proxy == proxy_cmp and rec_phone == phone_cmp:
+                logger.info(
+                    "find_pending: MATCH trouvé row=%d pending_id=%s",
+                    row_idx,
+                    rec.get("pending_id", "?"),
+                )
                 return {"row": row_idx, "record": rec, "headers": headers}
 
+        logger.warning(
+            "find_pending: aucun match — %d records scannés",
+            len(records),
+        )
         return None
 
     @staticmethod

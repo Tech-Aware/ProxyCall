@@ -100,6 +100,15 @@ class MessageRoutingService:
 
         # 1) Branche CONFIRMATION_PENDING
         pending = ConfirmationPendingRepository.find_pending(proxy_e164, sender_e164)
+        if not pending:
+            logger.warning(
+                "Aucun PENDING trouvé pour ce SMS entrant",
+                extra={
+                    "proxy_number": mask_phone(proxy_e164),
+                    "sender_number": mask_phone(sender_e164),
+                    "body_preview": (body[:40] + "..." if len(body) > 40 else body),
+                },
+            )
         if pending:
             rec = pending["record"]
             headers = pending["headers"]
@@ -121,6 +130,16 @@ class MessageRoutingService:
                 return MessageRoutingService._build_response("Erreur: code introuvable. Contactez le support.")
 
             if provided != expected:
+                logger.warning(
+                    "OTP mismatch",
+                    extra={
+                        "pending_id": rec.get("pending_id"),
+                        "proxy_number": mask_phone(proxy_e164),
+                        "sender_number": mask_phone(sender_e164),
+                        "expected_length": len(expected),
+                        "provided_length": len(provided),
+                    },
+                )
                 return MessageRoutingService._build_response("Code invalide. Réessayez.")
 
             # VERIFIED
