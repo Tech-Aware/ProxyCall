@@ -102,6 +102,47 @@ class TwilioClient:
             logger.exception("[red]Twilio[/red] SMS échec inattendu", exc_info=exc)
             raise
 
+    @staticmethod
+    def make_otp_call(*, from_number: str, to_number: str, pending_id: str) -> dict[str, object]:
+        """Lance un appel sortant pour délivrer l'OTP par voix (TwiML servi par /twilio/voice/otp)."""
+        from urllib.parse import urlencode
+
+        from_norm = TwilioClient._normalize_phone_number(from_number)
+        to_norm = TwilioClient._normalize_phone_number(to_number)
+
+        if not from_norm or not to_norm:
+            raise ValueError("from_number et to_number doivent être renseignés au format E.164")
+
+        base_url = (settings.PUBLIC_BASE_URL or "").rstrip("/")
+        if not base_url:
+            raise RuntimeError("PUBLIC_BASE_URL non configuré, impossible de lancer l'appel OTP")
+
+        twiml_url = f"{base_url}/twilio/voice/otp?{urlencode({'pending_id': pending_id})}"
+
+        try:
+            logger.info(
+                "[cyan]Twilio[/cyan] appel OTP sortant",
+                extra={"from": mask_phone(from_norm), "to": mask_phone(to_norm), "pending_id": pending_id},
+            )
+            call = twilio.calls.create(to=to_norm, from_=from_norm, url=twiml_url, method="POST")
+            sid = getattr(call, "sid", "")
+            logger.info(
+                "[green]Twilio[/green] appel OTP lancé",
+                extra={"sid": mask_sid(str(sid)), "to": mask_phone(to_norm)},
+            )
+            return {"sid": sid, "to": to_norm, "from": from_norm}
+        except TwilioRestException as exc:
+            logger.error(
+                "[red]Twilio[/red] appel OTP refusé code=%s status=%s err=%s",
+                getattr(exc, "code", None),
+                getattr(exc, "status", None),
+                str(exc),
+            )
+            raise
+        except Exception as exc:
+            logger.exception("[red]Twilio[/red] appel OTP échec inattendu", exc_info=exc)
+            raise
+
     # -----------------------
     # Webhook helpers
     # -----------------------

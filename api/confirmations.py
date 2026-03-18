@@ -1,18 +1,24 @@
 import logging
+import re
 from typing import Dict, Tuple
 from fastapi import APIRouter, Body, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from app.config import settings
 from app.validator import phone_e164_strict, email_strict, name_strict, iso_country_strict, number_type_strict, ValidationIssue
 from app.logging_config import mask_phone
+from integrations.email_client import EmailClient
 from integrations.twilio_client import TwilioClient
 from repositories.clients_repository import ClientsRepository
 from repositories.pools_repository import PoolsRepository
 from repositories.confirmation_pending_repository import ConfirmationPendingRepository
+from services.confirmation_service import ConfirmationService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+VALID_CHANNELS = {"sms", "voice", "email"}
 
 
 class CreateConfirmationPayload(BaseModel):
@@ -236,3 +242,167 @@ def expire_pending(hours: int = Body(48)):
     except Exception as exc:  # pragma: no cover
         logger.exception("Erreur expire_pending", exc_info=exc)
         raise HTTPException(status_code=500, detail="Erreur expiration confirmations") from exc
+
+
+# ────────────────────────────────────────────────
+# Resend OTP via un canal alternatif
+# ────────────────────────────────────────────────
+
+class ResendConfirmationPayload(BaseModel):
+    pending_id: str
+    channel: str  # "sms" | "voice" | "email"
+
+
+@router.post("/resend")
+def resend_confirmation(payload: ResendConfirmationPayload = Body(...)):
+    """Renvoie l'OTP existant via SMS, appel vocal ou email."""
+    try:
+        pending_id = str(payload.pending_id or "").strip()
+        channel = str(payload.channel or "").strip().lower()
+
+        if not pending_id:
+            raise HTTPException(status_code=400, detail="pending_id requis")
+        if channel not in VALID_CHANNELS:
+            raise HTTPException(status_code=400, detail=f"channel invalide (attendu: {', '.join(sorted(VALID_CHANNELS))})")
+
+        hit = ConfirmationPendingRepository.get_by_pending_id(pending_id)
+        if not hit:
+            raise HTTPException(status_code=404, detail="pending_id introuvable")
+
+        rec = hit["record"]
+        status = str(rec.get("status") or "").strip().upper()
+        if status != "PENDING":
+            raise HTTPException(status_code=400, detail=f"Confirmation non en attente (status={status})")
+
+        otp = str(rec.get("otp") or "").strip()
+        proxy_number = str(rec.get("proxy_number") or "").strip()
+        client_phone = str(rec.get("client_real_phone") or "").strip()
+        client_name = str(rec.get("client_name") or "").strip()
+        client_mail = str(rec.get("client_mail") or "").strip()
+
+        if not otp:
+            raise HTTPException(status_code=400, detail="OTP non généré pour ce pending")
+
+        if channel == "sms":
+            body = f"ProxyCall - Code de confirmation: {otp}"
+            TwilioClient.send_sms(from_number=proxy_number, to_number=client_phone, body=body)
+
+        elif channel == "voice":
+            TwilioClient.make_otp_call(
+                from_number=proxy_number,
+                to_number=client_phone,
+                pending_id=pending_id,
+            )
+
+        elif channel == "email":
+            if not client_mail:
+                raise HTTPException(status_code=400, detail="Pas d'email client pour ce pending")
+            if not EmailClient.is_configured():
+                raise HTTPException(status_code=400, detail="Service email non configuré (variables SMTP_* manquantes)")
+
+            base_url = (settings.PUBLIC_BASE_URL or "").rstrip("/")
+            verify_url = f"{base_url}/confirmations/verify?pending_id={pending_id}&otp={otp}"
+            EmailClient.send_otp_email(
+                to=client_mail,
+                otp=otp,
+                client_name=client_name or "Client",
+                verify_url=verify_url,
+            )
+
+        logger.info(
+            "OTP renvoyé",
+            extra={"pending_id": pending_id, "channel": channel, "to": mask_phone(client_phone)},
+        )
+        return {"pending_id": pending_id, "channel": channel, "status": "sent"}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Erreur resend_confirmation", exc_info=exc)
+        raise HTTPException(status_code=500, detail="Erreur lors du renvoi de l'OTP") from exc
+
+
+# ────────────────────────────────────────────────
+# Vérification OTP par lien email (GET)
+# ────────────────────────────────────────────────
+
+def _verify_html(title: str, message: str, success: bool) -> str:
+    color = "#16a34a" if success else "#dc2626"
+    icon = "&#10004;" if success else "&#10008;"
+    return f"""\
+<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title></head>
+<body style="font-family:sans-serif;max-width:480px;margin:40px auto;padding:20px;text-align:center;">
+  <div style="font-size:48px;color:{color};">{icon}</div>
+  <h1 style="color:{color};">{title}</h1>
+  <p>{message}</p>
+</body>
+</html>"""
+
+
+@router.get("/verify")
+def verify_confirmation(pending_id: str = "", otp: str = ""):
+    """Vérifie l'OTP via lien cliquable (email). Retourne une page HTML."""
+    pending_id = (pending_id or "").strip()
+    otp = (otp or "").strip()
+
+    if not pending_id or not otp:
+        return HTMLResponse(
+            _verify_html("Lien invalide", "Le lien de confirmation est incomplet.", False),
+            status_code=400,
+        )
+
+    hit = ConfirmationPendingRepository.get_by_pending_id(pending_id)
+    if not hit:
+        return HTMLResponse(
+            _verify_html("Confirmation introuvable", "Cette demande de confirmation n'existe pas.", False),
+            status_code=404,
+        )
+
+    rec = hit["record"]
+    status = str(rec.get("status") or "").strip().upper()
+
+    if status != "PENDING":
+        return HTMLResponse(
+            _verify_html("Déjà traité", "Cette confirmation a déjà été effectuée.", False),
+            status_code=400,
+        )
+
+    expected = str(rec.get("otp") or "").strip()
+    if otp != expected:
+        return HTMLResponse(
+            _verify_html("Code invalide", "Le code de confirmation est incorrect.", False),
+            status_code=400,
+        )
+
+    # Promotion complète
+    proxy_e164 = str(rec.get("proxy_number") or "").strip()
+    if not proxy_e164.startswith("+"):
+        proxy_e164 = "+" + re.sub(r"\D+", "", proxy_e164)
+    sender_e164 = str(rec.get("client_real_phone") or "").strip()
+    if not sender_e164.startswith("+"):
+        sender_e164 = "+" + re.sub(r"\D+", "", sender_e164)
+
+    try:
+        ConfirmationService.promote_pending(
+            pending_row=hit["row"],
+            record=rec,
+            proxy_e164=proxy_e164,
+            sender_e164=sender_e164,
+        )
+    except Exception as exc:
+        logger.exception("Erreur promotion via lien email", exc_info=exc)
+        return HTMLResponse(
+            _verify_html("Erreur", "Une erreur est survenue lors de la confirmation. Veuillez réessayer.", False),
+            status_code=500,
+        )
+
+    return HTMLResponse(
+        _verify_html(
+            "Confirmation réussie",
+            "Votre numéro ProxyCall est maintenant actif. Vous pouvez fermer cette page.",
+            True,
+        )
+    )

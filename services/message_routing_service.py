@@ -142,52 +142,13 @@ class MessageRoutingService:
                 )
                 return MessageRoutingService._build_response("Code invalide. Réessayez.")
 
-            # VERIFIED
-            ConfirmationPendingRepository.mark_verified(pending_row)
-
-            # Promotion Clients + attachement proxy
-            upsert_result = ConfirmationService.upsert_client_and_attach_proxy(
-                client_name=str(rec.get("client_name") or "").strip(),
-                client_mail=str(rec.get("client_mail") or "").strip(),
-                client_real_phone=str(rec.get("client_real_phone") or "").strip(),
-                proxy_number=str(rec.get("proxy_number") or "").strip(),
-                pending_id=str(rec.get("pending_id") or "").strip(),
+            # VERIFIED + Promotion (logique partagée SMS/voice/email)
+            ConfirmationService.promote_pending(
+                pending_row=pending_row,
+                record=rec,
+                proxy_e164=proxy_e164,
+                sender_e164=sender_e164,
             )
-            client = upsert_result.client
-
-            # Finalisation pool
-            ConfirmationService.finalize_pool_assignment(
-                proxy_number=str(rec.get("proxy_number") or "").strip(),
-                pending_id=str(rec.get("pending_id") or "").strip(),
-                client_id=str(client.client_id),
-                attribution_to_client_name=str(rec.get("client_name") or "").strip(),
-            )
-
-            # PROMOTED ou UPDATED selon le scénario
-            if upsert_result.created:
-                ConfirmationPendingRepository.mark_promoted(pending_row)
-            else:
-                if not upsert_result.updated_fields:
-                    details = "aucune modification de contact"
-                elif upsert_result.updated_fields == {"mail", "telephone"}:
-                    details = "mail + telephone"
-                else:
-                    details = " et ".join(sorted(upsert_result.updated_fields))
-                ConfirmationPendingRepository.mark_updated(pending_row, details)
-
-            # 5) Notifier explicitement le client (ne pas dépendre du TwiML reply)
-            try:
-                TwilioClient.send_sms(
-                    from_number=proxy_e164,
-                    to_number=sender_e164,
-                    body="Confirmation OK. Merci ! Enregistre ce numéro pour tes prochaines livraison !",
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Impossible d'envoyer le SMS de confirmation au client",
-                    exc_info=exc,
-                    extra={"proxy_number": mask_phone(proxy_e164), "sender_number": mask_phone(sender_e164)},
-                )
 
             # TwiML vide (on a déjà envoyé un SMS sortant)
             return MessageRoutingService._build_response()
