@@ -57,12 +57,33 @@ async def twilio_voice_webhook(request: Request):
 @router.post("/twilio/sms")
 async def twilio_sms_webhook(request: Request):
     form = await request.form()
+
+    # ── Filtre 1 : status callbacks (accusés de réception Twilio) ──
+    message_status = form.get("MessageStatus")
+    if message_status:
+        logger.info(
+            "Twilio status callback ignoré (status=%s, sid=%s)",
+            message_status,
+            form.get("MessageSid", "?"),
+        )
+        return Response(content="<Response></Response>", media_type="text/xml")
+
     from_raw = form.get("From")
     to_raw = form.get("To")
     body = form.get("Body") or ""
 
     from_number = _normalize_e164_like(from_raw)
     to_number = _normalize_e164_like(to_raw)
+
+    # ── Filtre 2 : From ou To manquant ──
+    if not from_number or not to_number:
+        logger.warning(
+            "Webhook SMS ignoré : From ou To manquant (from=%r, to=%r, keys=%s)",
+            from_raw,
+            to_raw,
+            sorted(form.keys()),
+        )
+        return Response(content="<Response></Response>", media_type="text/xml")
 
     logger.info(
         "Webhook SMS Twilio reçu (from=%s -> to=%s)",
