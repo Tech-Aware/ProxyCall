@@ -1,0 +1,727 @@
+<!-- index.html (UI personnalisée + spinner + normalisation live + pré-remplissage via URL) --> <!DOCTYPE html> <html>
+ <head>
+
+ <base target="_top" />
+
+ <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+ <style>
+
+
+ :root { --radius: 14px; --shadow: 0 10px 26px rgba(0,0,0,.08); }
+
+
+ body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f6f7fb; margin:0; }
+
+
+ .wrap { max-width: 760px; margin: 28px auto; padding: 0 14px; }
+
+
+ .card { background:#fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
+
+
+ .title { font-size: 20px; font-weight: 750; margin: 0; }
+
+
+ .sub { margin: 8px 0 0; opacity: .78; line-height: 1.35; }
+
+
+ .alert { margin-top: 14px; padding: 12px; border-radius: 12px; background:#fff7db; border:1px solid #ffe7a5; line-height: 1.35; }
+
+
+ .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+
+
+ @media (max-width: 640px){ .grid { grid-template-columns: 1fr; } }
+
+
+
+label { display:block; font-weight: 650; margin-top: 10px; }
+
+
+ input {
+
+
+
+ width:100%; padding: 10px 12px; border:1px solid #d7dbe7; border-radius: 12px; margin-top: 6px;
+
+
+
+ box-sizing: border-box; font-size: 14px;
+
+
+ }
+
+
+ input:focus { outline: none; border-color:#7f8cff; box-shadow: 0 0 0 3px rgba(127,140,255,.18); }
+
+
+ .hint { font-size: 12px; opacity: .75; margin-top: 6px; line-height: 1.35; }
+
+
+
+.btn { margin-top: 16px; padding: 12px 14px; border:0; border-radius: 12px; font-weight: 750; width:100%; cursor:pointer; background:#1f2a44; color:#fff; }
+
+
+ .btn[disabled]{ opacity:.65; cursor:not-allowed; }
+
+
+
+.msg { margin-top: 12px; padding: 12px; border-radius: 12px; line-height: 1.35; }
+
+
+ .msg.err { background:#ffe7ea; border:1px solid #ffc3cb; color:#7a0b1b; }
+
+
+ .msg.ok { background:#e8fff0; border:1px solid #b8f0cc; color:#0b4b22; }
+
+
+
+.row { display:flex; gap:10px; align-items:center; justify-content:center; }
+
+
+ .spinner {
+
+
+
+ width: 14px; height: 14px; border-radius: 50%;
+
+
+
+ border: 2px solid rgba(255,255,255,.45); border-top-color:#fff;
+
+
+
+ animation: spin .8s linear infinite; display:none;
+
+
+ }
+
+
+ @keyframes spin { to { transform: rotate(360deg); } }
+
+
+
+.footer { margin-top: 12px; font-size: 12px; opacity: .6; }
+
+
+ .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#f1f3ff; color:#2a3b8f; font-size:12px; }
+
+ </style>
+ </head>
+
+<body>
+
+ <div class="wrap">
+
+
+ <div class="card">
+
+
+
+ <div class="row" style="justify-content:space-between;">
+
+
+
+
+ <p class="title">Activer votre numéro de contact</p>
+
+
+
+
+ <span class="badge">Client Reseller 2.0</span>
+
+
+
+ </div>
+
+
+
+
+<p class="sub">
+
+
+
+
+ Merci de renseigner des coordonnées exactes, valides et actives. Un SMS avec un code vous sera envoyé.
+
+
+
+
+ Répondez au SMS avec ce code pour confirmer.
+
+
+
+ </p>
+
+
+
+
+<div class="alert">
+
+
+
+
+ ⚠️ Pour éviter les doublons : si vous changez à la fois <b>l’email</b> et le <b>téléphone</b>, faites-le en 2 étapes (l’un puis l’autre).
+
+
+
+ </div>
+
+
+
+
+<div class="grid">
+
+
+
+
+ <div>
+
+
+
+
+
+ <label>Prénom</label>
+
+
+
+
+
+ <input id="first" autocomplete="given-name" />
+
+
+
+
+
+ <div class="hint">Ex: “Jean”, “Marie-Claire”.</div>
+
+
+
+
+
+
+<label>Confirmation prénom</label>
+
+
+
+
+
+ <input id="first2" autocomplete="given-name" />
+
+
+
+
+ </div>
+
+
+
+
+
+<div>
+
+
+
+
+
+ <label>Nom</label>
+
+
+
+
+
+ <input id="last" autocomplete="family-name" />
+
+
+
+
+
+ <div class="hint">Le nom sera normalisé en MAJUSCULES (sans accents).</div>
+
+
+
+
+
+
+<label>Confirmation nom</label>
+
+
+
+
+
+ <input id="last2" autocomplete="family-name" />
+
+
+
+
+ </div>
+
+
+
+ </div>
+
+
+
+
+<div class="grid">
+
+
+
+
+ <div>
+
+
+
+
+
+ <label>Email</label>
+
+
+
+
+
+ <input id="email" type="email" autocomplete="email" />
+
+
+
+
+
+ <div class="hint">L’email est forcé en minuscules.</div>
+
+
+
+
+
+
+<label>Confirmation email</label>
+
+
+
+
+
+ <input id="email2" type="email" autocomplete="email" />
+
+
+
+
+ </div>
+
+
+
+
+
+<div>
+
+
+
+
+
+ <label>Téléphone (format international)</label>
+
+
+
+
+
+ <input id="phone" placeholder="+33612345678" autocomplete="tel" />
+
+
+
+
+
+ <div class="hint">Exemples : +33612345678 · +32470123456 · +34600111222</div>
+
+
+
+
+
+
+<label>Confirmation téléphone</label>
+
+
+
+
+
+ <input id="phone2" placeholder="+33612345678" autocomplete="tel" />
+
+
+
+
+ </div>
+
+
+
+ </div>
+
+
+
+
+<button class="btn" id="btn" onclick="submitReq()">
+
+
+
+
+ <span class="row">
+
+
+
+
+
+ <span id="sp" class="spinner"></span>
+
+
+
+
+
+ <span id="btnText">Recevoir mon code</span>
+
+
+
+
+ </span>
+
+
+
+ </button>
+
+
+
+
+<div id="msg" class="msg err" style="display:none;"></div>
+
+
+
+ <div id="ok" class="msg ok" style="display:none;"></div>
+
+
+
+
+<div class="footer">
+
+
+
+
+ Astuce: tu peux pré-remplir le lien avec <code>?email=...&phone=...</code>
+
+
+
+ </div>
+
+
+ </div>
+
+ </div>
+
+
+<script>
+
+
+ // --- Helpers UI
+
+
+ function setLoading(on){
+
+
+
+ document.getElementById("sp").style.display = on ? "inline-block" : "none";
+
+
+
+ document.getElementById("btn").disabled = !!on;
+
+
+ }
+
+
+ function showErr(t){
+
+
+
+ const el=document.getElementById("msg");
+
+
+
+ el.style.display="block"; el.textContent=t || "Erreur.";
+
+
+
+ document.getElementById("ok").style.display="none";
+
+
+ }
+
+
+ function showOk(t){
+
+
+
+ const el=document.getElementById("ok");
+
+
+
+ el.style.display="block"; el.textContent=t || "OK.";
+
+
+
+ document.getElementById("msg").style.display="none";
+
+
+ }
+
+
+ function hideMsgs(){
+
+
+
+ document.getElementById("msg").style.display="none";
+
+
+
+ document.getElementById("ok").style.display="none";
+
+
+ }
+
+
+
+// --- Client-side validation (simple). Le serveur refait les contrôles stricts.
+
+
+ function emailValid(s){ return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s); }
+
+
+ function phoneValid(s){ return /^\+[1-9]\d{7,14}$/.test(s); }
+
+
+
+// normalize live inputs
+
+
+ ["email","email2"].forEach(id => {
+
+
+
+ document.getElementById(id).addEventListener("input", (e)=> e.target.value = e.target.value.toLowerCase());
+
+
+ });
+
+
+ ["phone","phone2"].forEach(id => {
+
+
+
+ document.getElementById(id).addEventListener("input", (e)=> e.target.value = e.target.value.replace(/\s+/g,""));
+
+
+ });
+
+
+
+// URL prefill
+
+
+ function qp(name){ return new URLSearchParams(location.search).get(name) || ""; }
+
+
+ window.addEventListener("load", ()=>{
+
+
+
+ const e = qp("email"); if(e){ document.getElementById("email").value = e.toLowerCase(); }
+
+
+
+ const p = qp("phone"); if(p){ document.getElementById("phone").value = String(p).replace(/\s+/g,""); }
+
+
+ });
+
+
+
+function submitReq() {
+
+
+
+ hideMsgs();
+
+
+
+
+const payload = {
+
+
+
+
+ first_name: document.getElementById("first").value.trim(),
+
+
+
+
+ first_name_confirm: document.getElementById("first2").value.trim(),
+
+
+
+
+ last_name: document.getElementById("last").value.trim(),
+
+
+
+
+ last_name_confirm: document.getElementById("last2").value.trim(),
+
+
+
+
+ email: document.getElementById("email").value.trim(),
+
+
+
+
+ email_confirm: document.getElementById("email2").value.trim(),
+
+
+
+
+ phone: document.getElementById("phone").value.trim(),
+
+
+
+
+ phone_confirm: document.getElementById("phone2").value.trim(),
+
+
+
+ };
+
+
+
+
+// Required
+
+
+
+ const required = Object.values(payload).every(v => !!v);
+
+
+
+ if (!required) return showErr("Tous les champs sont requis.");
+
+
+
+
+// Basic checks (server does stricter normalization checks)
+
+
+
+ if (payload.first_name !== payload.first_name_confirm) return showErr("Les prénoms ne correspondent pas.");
+
+
+
+ if (payload.last_name !== payload.last_name_confirm) return showErr("Les noms ne correspondent pas.");
+
+
+
+
+if (!emailValid(payload.email) || !emailValid(payload.email_confirm)) return showErr("Email invalide.");
+
+
+
+ if (payload.email.toLowerCase() !== payload.email_confirm.toLowerCase()) return showErr("Les emails ne correspondent pas.");
+
+
+
+
+if (!phoneValid(payload.phone) || !phoneValid(payload.phone_confirm)) return showErr("Téléphone invalide (ex: +33612345678).");
+
+
+
+ if (payload.phone !== payload.phone_confirm) return showErr("Les téléphones ne correspondent pas.");
+
+
+
+
+setLoading(true);
+
+
+
+
+google.script.run
+
+
+
+
+ .withSuccessHandler((res) => {
+
+
+
+
+
+ setLoading(false);
+
+
+
+
+
+ if (!res || !res.ok) return showErr((res && res.message) ? res.message : "Erreur.");
+
+
+
+
+
+ // on affiche pending_id en test (utile)
+
+
+
+
+
+ const suffix = res.pending_id ? ` (id: ${res.pending_id})` : "";
+
+
+
+
+
+ showOk((res.message || "Code envoyé par SMS.") + suffix);
+
+
+
+
+ })
+
+
+
+
+ .withFailureHandler((err) => {
+
+
+
+
+
+ setLoading(false);
+
+
+
+
+
+ showErr("Erreur serveur. Réessaie plus tard.");
+
+
+
+
+
+ console.log(err);
+
+
+
+
+ })
+
+
+
+
+ .requestActivation(payload);
+
+
+ }
+
+ </script>
+ </body> </html>
