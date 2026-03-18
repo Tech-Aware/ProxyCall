@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from app.logging_config import mask_phone
 from models.client import Client
 from repositories.clients_repository import ClientsRepository
+from repositories.confirmation_pending_repository import ConfirmationPendingRepository
 from repositories.pools_repository import PoolsRepository
 
 logger = logging.getLogger(__name__)
@@ -248,3 +249,62 @@ class ConfirmationService:
             "TwilioPools finalisé assigned",
             extra={"row": row_index, "proxy": mask_phone(proxy_e164), "client_id": client_id},
         )
+
+    @staticmethod
+    def promote_pending(*, pending_row: int, record: dict, proxy_e164: str, sender_e164: str) -> UpsertResult:
+        """
+        Flow complet de promotion d'un pending vérifié :
+        VERIFIED → upsert client → finalize pool → PROMOTED/UPDATED → SMS confirmation.
+
+        Appelé depuis : SMS webhook, voice OTP gather, email verify.
+        """
+        from integrations.twilio_client import TwilioClient
+
+        # 1) VERIFIED
+        ConfirmationPendingRepository.mark_verified(pending_row)
+
+        # 2) Upsert client + attach proxy
+        upsert_result = ConfirmationService.upsert_client_and_attach_proxy(
+            client_name=str(record.get("client_name") or "").strip(),
+            client_mail=str(record.get("client_mail") or "").strip(),
+            client_real_phone=str(record.get("client_real_phone") or "").strip(),
+            proxy_number=str(record.get("proxy_number") or "").strip(),
+            pending_id=str(record.get("pending_id") or "").strip(),
+        )
+        client = upsert_result.client
+
+        # 3) Finalize pool
+        ConfirmationService.finalize_pool_assignment(
+            proxy_number=str(record.get("proxy_number") or "").strip(),
+            pending_id=str(record.get("pending_id") or "").strip(),
+            client_id=str(client.client_id),
+            attribution_to_client_name=str(record.get("client_name") or "").strip(),
+        )
+
+        # 4) PROMOTED ou UPDATED
+        if upsert_result.created:
+            ConfirmationPendingRepository.mark_promoted(pending_row)
+        else:
+            if not upsert_result.updated_fields:
+                details = "aucune modification de contact"
+            elif upsert_result.updated_fields == {"mail", "telephone"}:
+                details = "mail + telephone"
+            else:
+                details = " et ".join(sorted(upsert_result.updated_fields))
+            ConfirmationPendingRepository.mark_updated(pending_row, details)
+
+        # 5) SMS de confirmation au client
+        try:
+            TwilioClient.send_sms(
+                from_number=proxy_e164,
+                to_number=sender_e164,
+                body="Confirmation OK. Merci ! Enregistre ce numéro pour tes prochaines livraison !",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Impossible d'envoyer le SMS de confirmation au client",
+                exc_info=exc,
+                extra={"proxy_number": mask_phone(proxy_e164), "sender_number": mask_phone(sender_e164)},
+            )
+
+        return upsert_result
