@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from twilio.twiml.voice_response import VoiceResponse, Gather
 
 from app.logging_config import mask_phone
-from repositories.confirmation_pending_repository import ConfirmationPendingRepository
+from repositories.confirmation_pending_repository import ConfirmationPendingRepository, PENDING_STATUSES
 from services.call_routing_service import CallRoutingService
 from services.confirmation_service import ConfirmationService
 from services.message_routing_service import MessageRoutingService
@@ -128,7 +128,7 @@ async def twilio_voice_otp(request: Request):
         return Response(content=str(resp), media_type="text/xml")
 
     hit = ConfirmationPendingRepository.get_by_pending_id(pending_id)
-    if not hit or str(hit["record"].get("status") or "").strip().upper() != "PENDING":
+    if not hit or str(hit["record"].get("status") or "").strip().upper() not in PENDING_STATUSES:
         resp = VoiceResponse()
         resp.say("Cette demande de confirmation n'est plus valide. Au revoir.", language="fr-FR")
         return Response(content=str(resp), media_type="text/xml")
@@ -173,7 +173,7 @@ async def twilio_voice_otp_gather(request: Request):
         return Response(content=str(resp), media_type="text/xml")
 
     hit = ConfirmationPendingRepository.get_by_pending_id(pending_id)
-    if not hit or str(hit["record"].get("status") or "").strip().upper() != "PENDING":
+    if not hit or str(hit["record"].get("status") or "").strip().upper() not in PENDING_STATUSES:
         resp = VoiceResponse()
         resp.say("Cette demande n'est plus valide. Au revoir.", language="fr-FR")
         return Response(content=str(resp), media_type="text/xml")

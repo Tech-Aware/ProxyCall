@@ -1122,3 +1122,111 @@ function sha256Hex_(s) {
  Utilities.Charset.UTF_8
  );
  return bytes.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0")).join(""); }
+
+/* ===================== CASCADE OTP (TRIGGER TIME-DRIVEN) ===================== */
+
+/**
+ * Configuration de la cascade OTP.
+ * Délais entre chaque étape (en millisecondes).
+ */
+var CASCADE_CFG = {
+  DELAY_PENDING_TO_CALL_MS: 1 * 60 * 1000,   // 1 min après PENDING → relance voice
+  DELAY_CALL_TO_MAIL_MS:    2 * 60 * 1000,    // 2 min après PENDING_CALL → relance email
+};
+
+/**
+ * Trigger time-driven (toutes les minutes).
+ * Scanne CONFIRMATION_PENDING et fait avancer la cascade OTP
+ * en vérifiant les horodatages (otp_last_requested_at).
+ *
+ * Machine à états :
+ *   PENDING  →(1 min)→  PENDING_CALL  →(2 min)→  PENDING_MAIL
+ *
+ * À tout moment, si le client confirme (SMS/Voice/Email),
+ * le backend passe le status à VERIFIED → PROMOTED.
+ */
+function processCascadeOtp() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return;
+
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var shPending = ss.getSheetByName(WEBAPP_CFG.SHEET_PENDING);
+    if (!shPending) return;
+
+    var data = shPending.getDataRange().getValues();
+    if (data.length < 2) return;
+
+    var headers = data[0].map(function(h) { return String(h || "").trim(); });
+    var idxStatus = headers.indexOf("status");
+    var idxOtpTs  = headers.indexOf("otp_last_requested_at");
+    var idxId     = headers.indexOf("pending_id");
+    if (idxStatus === -1 || idxOtpTs === -1 || idxId === -1) return;
+
+    var now = Date.now();
+
+    for (var r = 1; r < data.length; r++) {
+      var status = String(data[r][idxStatus] || "").trim().toUpperCase();
+      var pendingId = String(data[r][idxId] || "").trim();
+      if (!pendingId) continue;
+
+      // Ignorer les status terminaux ou non concernés
+      if (status !== "PENDING" && status !== "PENDING_CALL") continue;
+
+      var tsRaw = data[r][idxOtpTs];
+      var ts = 0;
+      if (tsRaw instanceof Date) {
+        ts = tsRaw.getTime();
+      } else if (tsRaw) {
+        var t = Date.parse(String(tsRaw));
+        ts = isNaN(t) ? 0 : t;
+      }
+      if (!ts) continue;
+
+      var elapsed = now - ts;
+
+      if (status === "PENDING" && elapsed >= CASCADE_CFG.DELAY_PENDING_TO_CALL_MS) {
+        _cascadeResendOtp_(pendingId, "voice");
+        patchPending_(shPending, pendingId, {
+          status: "PENDING_CALL",
+          otp_last_requested_at: new Date().toISOString(),
+        });
+        console.log("[CASCADE] PENDING → PENDING_CALL pending_id=" + pendingId);
+      } else if (status === "PENDING_CALL" && elapsed >= CASCADE_CFG.DELAY_CALL_TO_MAIL_MS) {
+        _cascadeResendOtp_(pendingId, "email");
+        patchPending_(shPending, pendingId, {
+          status: "PENDING_MAIL",
+          otp_last_requested_at: new Date().toISOString(),
+        });
+        console.log("[CASCADE] PENDING_CALL → PENDING_MAIL pending_id=" + pendingId);
+      }
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Appelle POST /confirmations/resend pour relancer l'OTP via un canal alternatif.
+ * Utilise callApi_ de proxyCall.gs.
+ */
+function _cascadeResendOtp_(pendingId, channel) {
+  try {
+    callApi_("post", "/confirmations/resend", { pending_id: pendingId, channel: channel }, null);
+    console.log("[CASCADE] Resend " + channel + " OK pending_id=" + pendingId);
+  } catch (e) {
+    console.error("[CASCADE] Resend " + channel + " FAILED pending_id=" + pendingId + " err=" + safeErr_(e));
+  }
+}
+
+/**
+ * Installer le trigger time-driven pour la cascade OTP.
+ * À exécuter UNE SEULE FOIS dans l'éditeur Apps Script.
+ */
+function installCascadeTrigger() {
+  ScriptApp.newTrigger("processCascadeOtp")
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+  console.log("[CASCADE] Trigger processCascadeOtp installé (toutes les 1 min)");
+}

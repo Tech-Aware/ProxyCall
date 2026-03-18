@@ -12,7 +12,7 @@ from integrations.email_client import EmailClient
 from integrations.twilio_client import TwilioClient
 from repositories.clients_repository import ClientsRepository
 from repositories.pools_repository import PoolsRepository
-from repositories.confirmation_pending_repository import ConfirmationPendingRepository
+from repositories.confirmation_pending_repository import ConfirmationPendingRepository, PENDING_STATUSES
 from services.confirmation_service import ConfirmationService
 
 router = APIRouter()
@@ -290,7 +290,7 @@ def resend_confirmation(payload: ResendConfirmationPayload = Body(...)):
 
         rec = hit["record"]
         status = str(rec.get("status") or "").strip().upper()
-        if status != "PENDING":
+        if status not in PENDING_STATUSES:
             raise HTTPException(status_code=400, detail=f"Confirmation non en attente (status={status})")
 
         otp = str(rec.get("otp") or "").strip()
@@ -383,7 +383,7 @@ def verify_confirmation(pending_id: str = "", otp: str = ""):
     rec = hit["record"]
     status = str(rec.get("status") or "").strip().upper()
 
-    if status != "PENDING":
+    if status not in PENDING_STATUSES:
         return HTMLResponse(
             _verify_html("Déjà traité", "Cette confirmation a déjà été effectuée.", False),
             status_code=400,
