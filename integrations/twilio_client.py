@@ -117,6 +117,7 @@ class TwilioClient:
         try:
             pn = TwilioClient._normalize_phone_number(phone_number)
             if not pn:
+                logger.warning("ensure_voice_webhook: normalisation échouée pour %s", mask_phone(str(phone_number)))
                 return False
 
             target = (settings.VOICE_WEBHOOK_URL or "").strip()
@@ -126,11 +127,13 @@ class TwilioClient:
 
             incoming = twilio.incoming_phone_numbers.list(phone_number=pn, limit=1)
             if not incoming:
+                logger.warning("ensure_voice_webhook: numéro %s non trouvé dans Twilio", mask_phone(pn))
                 return False
 
             current = (getattr(incoming[0], "voice_url", "") or "").strip()
             current_method = (getattr(incoming[0], "voice_method", "") or "").strip().upper()
             if current == target and current_method == "POST":
+                logger.info("ensure_voice_webhook: déjà OK pour %s", mask_phone(pn))
                 return False
 
             incoming[0].update(voice_url=target, voice_method="POST")
@@ -159,6 +162,7 @@ class TwilioClient:
         try:
             pn = TwilioClient._normalize_phone_number(phone_number)
             if not pn:
+                logger.warning("ensure_messaging_webhook: normalisation échouée pour %s", mask_phone(str(phone_number)))
                 return False
 
             target = (settings.MESSAGING_WEBHOOK_URL or "").strip()
@@ -171,11 +175,24 @@ class TwilioClient:
 
             incoming = twilio.incoming_phone_numbers.list(phone_number=pn, limit=1)
             if not incoming:
+                logger.warning("ensure_messaging_webhook: numéro %s non trouvé dans Twilio", mask_phone(pn))
                 return False
 
             current = (getattr(incoming[0], "sms_url", "") or "").strip()
             current_method = (getattr(incoming[0], "sms_method", "") or "").strip().upper()
+
+            # Log capabilities SMS pour diagnostic
+            capabilities = getattr(incoming[0], "capabilities", None)
+            logger.info(
+                "ensure_messaging_webhook: numéro=%s capabilities=%s sms_url=%s sms_method=%s",
+                mask_phone(pn),
+                capabilities,
+                current[:60] if current else "(vide)",
+                current_method or "(vide)",
+            )
+
             if current == target and current_method == "POST":
+                logger.info("ensure_messaging_webhook: déjà OK pour %s", mask_phone(pn))
                 return False
 
             incoming[0].update(sms_url=target, sms_method="POST")

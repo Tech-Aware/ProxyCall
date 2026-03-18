@@ -100,25 +100,17 @@ def create_confirmation(payload: CreateConfirmationPayload = Body(...)):
         )
 
         # 4) S'assurer webhooks Twilio OK (utile pour la réponse SMS)
-        webhook_sms_ok = TwilioClient.ensure_messaging_webhook(proxy_number)
-        webhook_voice_ok = TwilioClient.ensure_voice_webhook(proxy_number)
-        if not webhook_sms_ok:
-            logger.error(
-                "Webhook SMS non configurable — la vérification OTP par SMS ne fonctionnera pas",
-                extra={"pending_id": pending_id, "proxy": mask_phone(proxy_number)},
-            )
-        if not webhook_voice_ok:
-            logger.warning(
-                "Webhook voice non configurable",
-                extra={"pending_id": pending_id, "proxy": mask_phone(proxy_number)},
-            )
+        # Note: ces fonctions retournent True si update effectué, False si déjà OK ou erreur
+        # Les fonctions elles-mêmes loggent les détails (déjà OK vs erreur vs update)
+        webhook_sms_updated = TwilioClient.ensure_messaging_webhook(proxy_number)
+        webhook_voice_updated = TwilioClient.ensure_voice_webhook(proxy_number)
         logger.info(
-            "Webhooks configurés",
+            "Webhooks vérifiés",
             extra={
                 "pending_id": pending_id,
                 "proxy": mask_phone(proxy_number),
-                "sms_webhook_ok": webhook_sms_ok,
-                "voice_webhook_ok": webhook_voice_ok,
+                "sms_webhook_updated": webhook_sms_updated,
+                "voice_webhook_updated": webhook_voice_updated,
             },
         )
 
