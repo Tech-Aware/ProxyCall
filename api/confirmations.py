@@ -314,19 +314,25 @@ def resend_confirmation(payload: ResendConfirmationPayload = Body(...)):
             )
 
         elif channel == "email":
-            if not client_mail:
-                raise HTTPException(status_code=400, detail="Pas d'email client pour ce pending")
-            if not EmailClient.is_configured():
-                raise HTTPException(status_code=400, detail="Service email non configuré (variables SMTP_* manquantes)")
-
             base_url = (settings.PUBLIC_BASE_URL or "").rstrip("/")
             verify_url = f"{base_url}/confirmations/verify?pending_id={pending_id}&otp={otp}"
-            EmailClient.send_otp_email(
-                to=client_mail,
-                otp=otp,
-                client_name=client_name or "Client",
-                verify_url=verify_url,
-            )
+
+            # 1) SMS avec lien de vérification (canal principal)
+            if proxy_number and client_phone:
+                sms_body = f"ProxyCall - Confirmez votre numéro ici : {verify_url}"
+                TwilioClient.send_sms(from_number=proxy_number, to_number=client_phone, body=sms_body)
+
+            # 2) Email HTML (canal secondaire, best-effort)
+            if client_mail and EmailClient.is_configured():
+                try:
+                    EmailClient.send_otp_email(
+                        to=client_mail,
+                        otp=otp,
+                        client_name=client_name or "Client",
+                        verify_url=verify_url,
+                    )
+                except Exception as exc:
+                    logger.warning("Echec envoi email OTP (best-effort)", exc_info=exc)
 
         logger.info(
             "OTP renvoyé",
