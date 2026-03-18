@@ -1132,3 +1132,54 @@ class TwilioClient:
         )
 
         return phone
+
+    @classmethod
+    def release_numbers(cls, numbers: list[str]) -> dict:
+        """
+        Supprime une liste de numéros du compte Twilio (IncomingPhoneNumber.delete).
+        Ne modifie PAS la feuille Google Sheets.
+
+        Retourne {"released": [...], "not_found": [...], "failed": [...]}.
+        """
+        released: list[str] = []
+        not_found: list[str] = []
+        failed: list[dict] = []
+
+        for raw_number in numbers:
+            phone = cls._normalize_phone_number(raw_number)
+            if not phone:
+                failed.append({"number": raw_number, "error": "Numéro invalide (normalisation impossible)"})
+                logger.warning("[magenta]POOL[/magenta] release skip invalid number=%s", raw_number)
+                continue
+
+            try:
+                incoming = twilio.incoming_phone_numbers.list(phone_number=phone, limit=1)
+            except Exception as exc:
+                failed.append({"number": phone, "error": str(exc)})
+                logger.error(
+                    "[magenta]POOL[/magenta] release list error phone=%s err=%s",
+                    mask_phone(phone), exc,
+                )
+                continue
+
+            if not incoming:
+                not_found.append(phone)
+                logger.info("[magenta]POOL[/magenta] release not_found phone=%s", mask_phone(phone))
+                continue
+
+            try:
+                incoming[0].delete()
+                released.append(phone)
+                logger.info("[magenta]POOL[/magenta] release ok phone=%s", mask_phone(phone))
+            except Exception as exc:
+                failed.append({"number": phone, "error": str(exc)})
+                logger.error(
+                    "[magenta]POOL[/magenta] release delete error phone=%s err=%s",
+                    mask_phone(phone), exc,
+                )
+
+        logger.info(
+            "[magenta]POOL[/magenta] release done released=%s not_found=%s failed=%s",
+            len(released), len(not_found), len(failed),
+        )
+        return {"released": released, "not_found": not_found, "failed": failed}

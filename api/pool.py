@@ -14,6 +14,10 @@ class SyncPoolPayload(BaseModel):
     apply: bool = True
 
 
+class ReleasePayload(BaseModel):
+    numbers: list[str]
+
+
 @router.get("/available")
 def list_available(country_iso: str, number_type: str | None = None):
     try:
@@ -140,3 +144,15 @@ def fix_webhooks(
     except Exception as exc:  # pragma: no cover - dépendances externes
         logger.exception("Erreur lors de la correction des webhooks Twilio", exc_info=exc)
         raise HTTPException(status_code=500, detail="Erreur correction webhooks") from exc
+
+
+@router.post("/release")
+def release(payload: ReleasePayload):
+    if not payload.numbers:
+        raise HTTPException(status_code=400, detail="La liste 'numbers' ne peut pas être vide")
+    try:
+        result = TwilioClient.release_numbers(payload.numbers)
+        return result
+    except Exception as exc:  # pragma: no cover - dépendances externes
+        logger.exception("Erreur lors de la libération de numéros", exc_info=exc)
+        raise HTTPException(status_code=500, detail="Erreur libération numéros") from exc
