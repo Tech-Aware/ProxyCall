@@ -245,6 +245,25 @@ def expire_pending(hours: int = Body(48)):
 
 
 # ────────────────────────────────────────────────
+# Statut d'une confirmation (pour Apps Script)
+# ────────────────────────────────────────────────
+
+@router.get("/status")
+def get_confirmation_status(pending_id: str = ""):
+    """Retourne le statut actuel d'un pending (pour polling Apps Script)."""
+    pending_id = (pending_id or "").strip()
+    if not pending_id:
+        raise HTTPException(status_code=400, detail="pending_id requis")
+
+    hit = ConfirmationPendingRepository.get_by_pending_id(pending_id)
+    if not hit:
+        raise HTTPException(status_code=404, detail="pending_id introuvable")
+
+    status = str(hit["record"].get("status") or "").strip()
+    return {"pending_id": pending_id, "status": status}
+
+
+# ────────────────────────────────────────────────
 # Resend OTP via un canal alternatif
 # ────────────────────────────────────────────────
 
