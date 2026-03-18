@@ -12,6 +12,10 @@ from integrations.sheets_client import SheetsClient
 
 logger = logging.getLogger(__name__)
 
+# Status considérés comme "en attente de confirmation OTP"
+# Utilisé par find_pending, resend, verify, voice OTP, expire
+PENDING_STATUSES = {"PENDING", "PENDING_CALL", "PENDING_MAIL"}
+
 def _norm_cmp(num: str | None) -> str:
     raw = str(num or "").strip()
     if not raw:
@@ -172,7 +176,7 @@ class ConfirmationPendingRepository:
             proxy_match = rec_proxy == proxy_cmp
             phone_match = rec_phone == phone_cmp
 
-            if proxy_match and phone_match and status != "PENDING":
+            if proxy_match and phone_match and status not in PENDING_STATUSES:
                 logger.warning(
                     "find_pending: proxy+phone matchent mais status=%s (row=%d, pending_id=%s)",
                     status,
@@ -181,7 +185,7 @@ class ConfirmationPendingRepository:
                 )
                 continue
 
-            if status != "PENDING":
+            if status not in PENDING_STATUSES:
                 continue
 
             if rec_proxy == proxy_cmp and rec_phone == phone_cmp:
@@ -250,7 +254,7 @@ class ConfirmationPendingRepository:
 
         for row_idx, rec in enumerate(records, start=2):
             status = str(rec.get("status") or "").strip().upper()
-            if status != "PENDING":
+            if status not in PENDING_STATUSES:
                 continue
 
             created_raw = str(rec.get("created_at") or "").strip()
