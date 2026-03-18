@@ -912,7 +912,7 @@ for (let r = 1; r < data.length; r++) {
 
  const st = String(data[r][idxStatus] || "").trim().toUpperCase();
 
- if (!["INIT", "PENDING", "VERIFIED"].includes(st)) continue;
+ if (!["INIT", "PENDING", "PENDING_CALL", "PENDING_MAIL", "VERIFIED"].includes(st)) continue;
 
 
 const mail = normEmail_(data[r][idxMail]);
